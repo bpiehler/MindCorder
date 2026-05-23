@@ -56,26 +56,29 @@
     - `onWritable()`: connection ready, can send messages
     - `onSuspend()`: connection lost, set internal `connected = false` flag
     - `onReadable()`: process incoming messages from companion app
-  - Maintain a monotonic `outgoingMsgId` counter — attach `MSG_ID` to every outgoing message for deduplication on the phone side
-  - Track `lastIncomingMsgId` — silently drop duplicate messages where `MSG_ID <= lastIncomingMsgId`
+  - Maintain a monotonic `outgoingMsgId` counter — attach `MSG_ID` and `SESSION_ID` to every outgoing message.
+  - **Handshake Protocol:** Implement startup handshake using `COMMAND=0` (Handshake). On startup, the watch sends its active `SESSION_ID` and `lastIncomingMsgId`. The companion app responds with a Handshake ACK containing the current `SESSION_ID`. If the session ID matches, expected counters are aligned. If a newer `SESSION_ID` is received (due to app reinstall), Baselines are synchronized.
+  - Track `lastIncomingMsgId` — silently drop duplicate messages where `MSG_ID <= lastIncomingMsgId` under the same `SESSION_ID`.
 - [ ] **Message protocol** (watch → phone):
-  - `COMMAND=1` + `RAW_TEXT` + `NOTE_ID` + `MSG_ID`: New dictation result
-  - `COMMAND=2` + `NOTE_ID` + `MSG_ID`: Fetch note body by ID
+  - `COMMAND=0` + `SESSION_ID` + `MSG_ID` + `LAST_INCOMING_MSG_ID`: Handshake sync
+  - `COMMAND=1` + `RAW_TEXT` + `NOTE_ID` + `MSG_ID` + `SESSION_ID`: New dictation result
+  - `COMMAND=2` + `NOTE_ID` + `MSG_ID` + `SESSION_ID`: Fetch note body by ID
 - [ ] **Message protocol** (phone → watch):
-  - `COMMAND=10` + `TITLE` + `MSG_ID`: Summary title (sent immediately when phone starts processing)
-  - `COMMAND=11` + `SUMMARY_CHUNK` + `CHUNK_INDEX` + `CHUNK_TOTAL` + `MSG_ID`: Summary body chunk
-  - `COMMAND=12` + `COMPLETE` + `MSG_ID`: Transfer complete
-  - `COMMAND=13` + `CHUNK_RESET`: Abort current transfer, clear reassembly buffer
-  - `COMMAND=14` + `TITLE` + `BODY` + `MSG_ID`: Full note response (for FETCH_NOTE, when body fits in single message)
+  - `COMMAND=0` + `SESSION_ID` + `MSG_ID`: Handshake sync ACK
+  - `COMMAND=10` + `TITLE` + `MSG_ID` + `SESSION_ID`: Summary title (sent immediately when phone starts processing)
+  - `COMMAND=11` + `SUMMARY_CHUNK` + `CHUNK_INDEX` + `CHUNK_TOTAL` + `MSG_ID` + `SESSION_ID`: Summary body chunk (max 2KB)
+  - `COMMAND=12` + `COMPLETE` + `MSG_ID` + `SESSION_ID`: Transfer complete
+  - `COMMAND=13` + `CHUNK_RESET` + `SESSION_ID`: Abort current transfer, clear reassembly buffer
+  - `COMMAND=14` + `TITLE` + `BODY` + `MSG_ID` + `SESSION_ID`: Full note response (for FETCH_NOTE, when body fits in single 2KB message)
 - [ ] **Chunk reassembly** (`embeddedjs/chunk.js`):
-  - Maintain reassembly state: `{ chunks: [], expectedTotal: null, nextIndex: 0, msgId: null }`
-  - On receive chunk: validate `CHUNK_INDEX === nextIndex`, reject duplicates (index already received), store in array
+  - Maintain reassembly state: `{ chunks: [], expectedTotal: null, nextIndex: 0, msgId: null, sessionId: null }`
+  - On receive chunk: validate `CHUNK_INDEX === nextIndex`, reject duplicates, store in byte array. **Note:** On starting a new reassembly, make sure `main.js` registers a timeout callback using `chunk.setOnTimeoutCallback` so the UI transitions to the `ERROR` state rather than hanging.
+  - To prevent Heap Fragmentation and OOM, store chunks as raw bytes (`Uint8Array`) inside a pre-allocated 8KB `ArrayBuffer` and use `.set()` to copy chunk bytes. Only convert to JS String once using `String.fromArrayBuffer()` upon complete transfer.
   - On receive `CHUNK_TOTAL`: validate it matches expected total, reject if inconsistent
   - On receive `CHUNK_RESET`: clear all state, return to idle
-  - On receive `COMPLETE`: verify all chunks received (`chunks.length === expectedTotal`), concatenate into full string, clear state
-  - Timeout: 10 seconds between chunks — on timeout, clear state, transition to `ERROR` state with message "Transfer failed — tap to retry"
-  - Maximum total payload: guard against buffer overflow — if `CHUNK_TOTAL * maxChunkSize > 8192` bytes, reject and request reset
-  - Memory: pre-allocate a single `ArrayBuffer` of max size (8KB) for reassembly, reuse across transfers
+  - On receive `COMPLETE`: verify all chunks received, convert array buffer to full string, clear state
+  - Timeout: 10 seconds between chunks — on timeout, clear state, call the registered timeout callback which transitions the app state to `ERROR` state with message "Transfer failed — tap to retry"
+  - Maximum total payload: guard against buffer overflow — if `CHUNK_TOTAL * 2048 > 8192` bytes, reject and request reset
 
 ### 1.3 Dictation Session
 - [x] **Alloy dictation API verified** (see `DEV_NOTES.md` for full details). Source: [hellodictation example](https://github.com/Moddable-OpenSource/pebble-examples/tree/main/hellodictation).
@@ -144,18 +147,18 @@
   - `FETCHING`: "Loading..." with spinner
   - `ERROR`: Error message with "Tap to dismiss"
 
-### 1.5 UI with Piu Framework
-- [ ] Import Piu UI framework (`commodetto/Piu`)
-- [ ] Build screens as Piu containers:
-  - **Idle screen** (`ui/idle.js`): Centered text, minimal design, connection status indicator (small dot: green=connected, gray=disconnected)
-  - **Listening screen** (`ui/listening.js`): Recording indicator (pulsing circle or waveform), "Listening..." text
-  - **Processing screen** (`ui/processing.js`): Spinner, "Processing..." text, title appears when received
-  - **Summary screen** (`ui/summary.js`): Title at top (bold, larger font), body text below (plain text, pre-formatted on phone side — no Markdown parsing on watch)
-  - **Note list screen** (`ui/notelist.js`): Scrollable list of titles with timestamps, Up/Down navigation
-- [ ] Circular-aware layout: use Piu's layout system with proper padding from edges for the 260×260 round display
-- [ ] Touch support: Emery and Gabbro both have touchscreens — allow tap-to-scroll in summary and note list views
-- [ ] On summary receipt: `Vibes.doublePulse()` (import from `pebble/vibes`)
-- [ ] **Markdown handling:** The phone strips Markdown to plain text before sending. The watch receives pre-formatted text with explicit line breaks and bullet characters (•, -, *). The watch does NOT parse Markdown.
+### 1.5 UI with Poco Framework
+- [ ] Render UI screens procedurally in `main.js` (and optionally sub-modules) using `commodetto/Poco` canvas drawing.
+- [ ] Implement screen rendering functions:
+  - **Idle screen**: Centered text "MindCorder" (Leco font), subtitle "Tap to record", and connection status dot (green if connected, gray if disconnected).
+  - **Listening screen**: Red indicator shape that flashes/pulses (using a `Timer.repeat` animation loop), and "Listening..." text.
+  - **Processing screen**: "Processing..." text and the summary title (bold font) once received from the companion app.
+  - **Summary screen**: Note title bolded at the top, followed by multi-line body text. Since there's no Markdown parsing on-watch, render plain text with explicit line breaks and bullet points.
+  - **Note list screen**: Scrollable list of titles with date/timestamp, responding to Up/Down hardware button presses.
+- [ ] Circular-aware layout: Calculate coordinates manually with padding (e.g. `PADDING = 20`) to keep all text and shapes safe inside the Gabbro circular boundary (260×260).
+- [ ] Touch support: Support touchscreen scroll/tap actions on Emery and Gabbro.
+- [ ] On summary receipt: Call `Vibes.doublePulse()` (imported from `pebble/vibes`).
+- [ ] **Markdown handling:** The companion app on the phone strips Markdown to plain text before sending. The watch receives pre-formatted text with explicit line breaks and bullet characters (•). The watch does NOT parse Markdown.
 
 ### 1.6 Note Title Storage (File-Based)
 - [ ] Import file system API (`device.files`)
@@ -188,21 +191,34 @@
 - [ ] When `onSuspend` fires: set `connected = false`, update UI indicator
 - [ ] When reconnected after disconnection: check for queued outgoing messages, send them
 
-### 1.8 Testing This Phase
-- [ ] **Emulator tests** (watch-side only, no real phone needed):
-  - Dictation simulation: use `pebble emu-dictation` or mock the dictation callback
-  - Chunk reassembly: write unit tests for `chunk.js` with simulated chunk sequences
-  - State machine: verify all transitions with simulated events
-  - Note title storage: verify file read/write, index management, cache eviction
-  - UI rendering: verify screens display correctly in `emery` and `gabbro` emulators
-- [ ] **Mock companion test** (requires real phone with Pebble app installed):
-  - Since PKJS is not used, create a separate test Android app that uses PebbleKit Android 2 to echo messages back
-  - Or: test with the real Flutter app once Phase 2 is started (cross-phase testing)
-- [ ] Run on emulator: `pebble install --emulator emery` and `pebble install --emulator gabbro`
+### 1.8 Testing (Watch App Only)
+
+**See the simplified testing strategy in the [Test Automation Strategy](#test-automation-strategy) section.**
+
+Phase 1 tests cover:
+- [ ] **Core Logic Unit Tests** (Node.js): `state.js`, `chunk.js`, `dictation.js` error mapping. We focus unit testing on the core logic and sequence, avoiding complex rendering mocks of `Poco` or other native layers.
+- [ ] **Emulator Smoke Tests** (Manual + Logs): Build and install on the emery and gabbro emulators. Verify screens, layout, state transitions, and connection indicators using Pebble console logs (`pebble logs`).
+
+Run commands:
+```bash
+# Run logic unit tests
+node watch/test/logic_runner.js
+
+# Install on emulator
+pebble install --emulator emery
+pebble install --emulator gabbro
+```
 
 **Exit criteria:**
-- **Emulator gate:** Watch app UI renders correctly on both emery and gabbro emulators. State machine handles all transitions. Chunk reassembly passes unit tests. Note title storage works (read/write/cache eviction). Dictation callback flow works (simulated).
-- **Real-device gate (can be deferred to Phase 3 if no test companion available):** Watch connects to phone via PebbleKit Android 2. Dictation text reaches companion app. Summary returns and displays. Note titles cache and navigate offline.
+- **Unit gate:** All ~55 unit tests pass on Node.js runner and XS engine (mcrun)
+- **Emulator gate:** Watch app UI renders correctly on both emery and gabbro emulators. State machine handles all transitions. Chunk reassembly passes all test cases. Note title storage works (read/write/cache eviction). Dictation error mapping covers all known error types.
+- **Real-device gate (can be deferred to Phase 3):** Watch connects to phone via PebbleKit Android 2. Dictation text reaches companion app. Summary returns and displays. Note titles cache and navigate offline.
+
+**Files to create:**
+- `watch/test/runner.js` — test runner entry point
+- `watch/test/utils.js` — assertion helpers
+- `watch/test/mocks/*.js` — mock Pebble API implementations (8 mocks)
+- `watch/test/unit/*.test.js` — unit test files (5 modules)
 
 ---
 
@@ -244,21 +260,21 @@
 - [ ] Run `dart run build_runner build` to generate Drift code
 
 ### 2.2 Data Model (Drift)
-- [ ] Table `notes`:
-  ```sql
-  CREATE TABLE notes (
-    id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
-    watch_id INTEGER,              -- Matches watch-side note ID (Date.now() timestamp)
-    created_at DATETIME NOT NULL,
-    raw_text TEXT NOT NULL,
-    summary_title TEXT,            -- Null until AI processes
-    summary_body TEXT,             -- Null until AI processes
-    body_plain_text TEXT,          -- Pre-formatted plain text for watch display
-    is_archived INTEGER NOT NULL DEFAULT 0,
-    is_pinned INTEGER NOT NULL DEFAULT 0,
-    ai_provider TEXT,              -- Which provider was used (nano, openai, anthropic, etc.)
-    processing_status TEXT NOT NULL DEFAULT 'pending'  -- pending, processing, completed, failed
-  );
+- [ ] Table `Notes` defined using Drift Dart DSL:
+  ```dart
+  class Notes extends Table {
+    IntColumn get id => integer().autoIncrement()();
+    IntColumn get watchId => integer().nullable()(); // Matches watch-side note ID (timestamp)
+    DateTimeColumn get createdAt => dateTime()();
+    TextColumn get rawText => text()();
+    TextColumn get summaryTitle => text().nullable()(); // Null until AI processes
+    TextColumn get summaryBody => text().nullable()(); // Null until AI processes
+    TextColumn get bodyPlainText => text().nullable()(); // Pre-formatted plain text for watch
+    BoolColumn get isArchived => boolean().withDefault(const Constant(false))();
+    BoolColumn get isPinned => boolean().withDefault(const Constant(false))();
+    TextColumn get aiProvider => text().nullable()(); // nano, openai, anthropic, etc.
+    TextColumn get processingStatus => text().withDefault(const Constant('pending'))(); // pending, processing, completed, failed
+  }
   ```
 - [ ] Schema versioning: start with `schemaVersion: 1`, include `migration` strategy from the start. When schema changes in future phases, use Drift's `onUpgrade` callback.
 - [ ] DAO queries:
@@ -284,15 +300,16 @@
   - `CloudAIService` implements `AIService` (wraps HTTP calls to cloud providers)
   - Swapping implementations is trivial if the package is abandoned
 - [ ] **Capability detection:** On startup:
-  - Check `gemini_nano_android.isAvailable()` for Gemini Nano
-  - If available, check if model is downloaded (package docs indicate model downloads in background — handle "available but not ready" state)
+  - Check `gemini_nano_android.isAvailable()` for Gemini Nano.
+  - Model on-device AI state as an explicit three-state enum: `unavailable`, `downloading`, or `ready`. If available but downloading, handle downloading progress gracefully and route early requests to cloud fallback.
   - Read user preference from settings (prefer nano vs. prefer cloud)
 - [ ] **Router decision tree:**
   ```
   1. Is user preference set to "cloud only"? → cloudSummarize()
-  2. Is Gemini Nano available AND model downloaded? → nanoSummarize()
-     → On Nano failure (OOM, context exceeded) → retry with cloudSummarize()
-  3. Nano unavailable or not downloaded → cloudSummarize()
+  2. Is Gemini Nano available AND model downloaded (ready)? → nanoSummarize()
+     → Set a strict timeout on Gemini Nano processing (e.g. 8 seconds) to prevent freezes.
+     → On Nano failure (OOM, context exceeded, timeout) → retry with cloudSummarize()
+  3. Nano unavailable or not downloaded (downloading/unavailable) → cloudSummarize()
      → Check if API key is configured
      → If no key → store raw text, set status 'failed', show "Configure API key" prompt
      → If key exists → send request
@@ -315,12 +332,13 @@
 - [ ] Fixed prompt (embedded constant):
   ```
   Format the following messy transcript into a clean, concise summary.
-  Return ONLY a valid JSON object with exactly two fields:
+  Return ONLY a valid JSON object wrapped inside <output_json>...</output_json> XML tags with exactly two fields:
   "title": a short descriptive title for the note (max 8 words),
   "body": structured bullet points in Markdown (max 5 bullets, remove filler words, organize key points logically).
   Transcript: """<raw_text>"""
   ```
-- [ ] JSON parser with validation and fallback:
+- [ ] **Robust JSON extractor & parser with validation and fallback:**
+  - Standard LLMs (especially Gemini Nano) may wrap JSON in Markdown code fences (e.g., ` ```json ... ``` `) or add conversation prose. Use a regex-based extractor to isolate the content within the outermost curly braces `{ ... }` or within `<output_json>` tags.
   - If model returns valid JSON with `title` and `body` fields → use directly
   - If model returns non-JSON → treat entire response as body, generate title from first sentence or use "Untitled"
   - If JSON is valid but missing `title` → use "Untitled"
@@ -365,32 +383,31 @@
 - [ ] Metadata: raw transcript collapsed by default (expandable), created_at, AI provider used
 - [ ] Actions: archive, pin, delete, retry (if failed)
 
-### 2.8 PebbleKit Android 2 Integration (Flutter Plugin)
-- [ ] Create Flutter plugin structure for PebbleKit Android 2:
+### 2.8 PebbleKit Android 2 Integration (Embedded Native Bridge)
+- [ ] Embed PebbleKit Android 2 and the MethodChannel bridge directly into the companion app's native Android source folder to avoid multi-package plugin complexity:
   ```
   mindcorder_companion/
-    android/
-      src/main/kotlin/com/mindcorder/
-        PebbleBridgePlugin.kt      # Flutter plugin entry point
-        PebbleListenerService.kt   # BasePebbleListenerService implementation
-        PebbleMessageHandler.kt    # Message parsing and routing
+    android/app/src/main/kotlin/com/mindcorder/app/
+      MainActivity.kt            # Registers MethodChannel & EventChannel
+      PebbleListenerService.kt   # BasePebbleListenerService implementation
+      PebbleMessageHandler.kt    # Translates and processes Pebble dictionaries
     lib/
       src/pebble/
-        pebble_bridge.dart         # Dart interface to native code
-        pebble_service.dart        # High-level Pebble communication service
+        pebble_bridge.dart         # Dart side of the MethodChannel/EventChannel
+        pebble_service.dart        # High-level Pebble communication and queue service
   ```
 - [ ] **Kotlin side** (`PebbleListenerService.kt`):
   - Extend `BasePebbleListenerService` from PebbleKit Android 2
   - Override `onMessageReceived(watchappUUID, data, watch)`:
     - Parse `PebbleDictionary` into key-value pairs
-    - Forward to Flutter via MethodChannel (`mindcorder/pebble`)
+    - Forward to Flutter via MethodChannel/EventChannel (`mindcorder/pebble`)
     - Send ACK to Pebble via `PebbleKit.sendAckToPebble()` (required to prevent timeouts)
   - Override `onAppOpened` / `onAppClosed`: forward to Flutter for connection state updates
-- [ ] **Kotlin side** (`PebbleBridgePlugin.kt`):
-  - Implement `FlutterPlugin` interface
-  - Register MethodChannel: `mindcorder/pebble`
+- [ ] **Kotlin side** (`MainActivity.kt`):
+  - Configure the FlutterEngine
+  - Register MethodChannel and EventChannel: `mindcorder/pebble`
   - Handle method calls from Dart:
-    - `sendToWatch`: receives dictionary data, calls `DefaultPebbleSender().sendDataToPebble()`
+    - `sendToWatch`: receives dictionary data (Map), calls `DefaultPebbleSender().sendDataToPebble()`
     - `startAppOnWatch`: calls `sender.startAppOnTheWatch()`
     - `stopAppOnWatch`: calls `sender.stopAppOnTheWatch()`
     - `isWatchConnected`: returns connection status
@@ -415,14 +432,37 @@
   - Bound Service keeps the app awake while watch app is running
   - Handle app backgrounding: sender can remain active via Bound Service
 
-### 2.9 Testing This Phase
-- [ ] Manual input: type/paste raw text → tap "Summarize" → verify title + body generated → stored in DB → appears in list
-- [ ] Test both AI paths: Nano (if device supports) and cloud (all preset providers)
-- [ ] Test error states: no API key, invalid key, network failure, Nano unavailable, Nano fails mid-generation → cloud retry
-- [ ] Unit tests for: DB operations, JSON parsing, prompt construction, provider config management, plain text conversion
-- [ ] Widget tests: list view, detail view, settings page, BYOK form
+### 2.9 Testing (Companion App Only)
 
-**Exit criteria:** Flutter app accepts raw text, summarizes via either AI path, stores/retrieves notes, full list + detail UI works. PebbleKit Android 2 plugin compiles and registers correctly. MethodChannel communication between Dart and Kotlin verified.
+**See full test automation strategy in the [Test Automation Strategy](#test-automation-strategy) section.**
+
+Phase 2 tests cover:
+
+- [ ] **Unit tests** (Dart): AI response parsing, plain text converter, Drift DB operations, AI service orchestration, provider config, settings, queue manager, communication protocol — ~65 tests total
+- [ ] **Widget tests** (Flutter): Note list, note detail, settings page, BYOK form — ~15 tests
+- [ ] **Kotlin unit tests** (JUnit): PebbleBridgePlugin MethodChannel, PebbleListenerService message parsing, PebbleMessageHandler routing
+- [ ] **Manual tests**: Type/paste raw text → "Summarize" → verify title + body → stored → appears in list
+
+Run commands:
+```bash
+# Dart unit tests
+flutter test test/unit/
+
+# Widget tests
+flutter test test/widget/
+
+# Kotlin unit tests
+./gradlew test
+```
+
+**Exit criteria:**
+- [ ] All unit tests pass (Dart ~65 tests, Kotlin ~8 tests)
+- [ ] All widget tests pass (~15 tests)
+- [ ] AI response parser handles all edge cases (valid JSON, non-JSON, missing fields)
+- [ ] Plain text converter covers all Markdown patterns
+- [ ] Drift DAO tests pass with in-memory SQLite
+- [ ] PebbleKit plugin MethodChannel verified (Dart ↔ Kotlin round-trip)
+- [ ] Communication protocol tests pass with mocked watch responses
 
 ---
 
@@ -452,10 +492,10 @@
 - [ ] **Phone → Watch (summary body):**
   1. AI completes → Flutter has `title` + `body` + `body_plain_text`
   2. Flutter updates Drift DB (`processing_status = 'completed'`)
-  3. **Chunk splitting logic** (Kotlin side):
+  3. **Chunk splitting logic** (Dart/Flutter side):
      - Measure `body_plain_text` length against max AppMessage size (~8KB for modern SDK)
-     - If fits in single message: send `COMMAND=14` + `TITLE` + `BODY` + `MSG_ID`
-     - If too large: split into chunks, send `COMMAND=11` + `SUMMARY_CHUNK` + `CHUNK_INDEX` + `CHUNK_TOTAL` + `MSG_ID` for each, then `COMMAND=12` + `COMPLETE` + `MSG_ID`
+     - If fits in single message: send `COMMAND=14` + `TITLE` + `BODY` + `MSG_ID` over the MethodChannel to Kotlin, which sends it to the watch
+     - If too large: split into chunks, and send `COMMAND=11` + `SUMMARY_CHUNK` + `CHUNK_INDEX` + `CHUNK_TOTAL` + `MSG_ID` for each chunk, followed by `COMMAND=12` + `COMPLETE` + `MSG_ID` as separate MethodChannel calls. This keeps the Kotlin layer thin and completely stateless.
      - Include `MSG_ID` in each chunk for deduplication on watch side
   4. Watch reassembles chunks (Phase 1 chunk.js logic), displays summary, caches title
 - [ ] **Watch → Phone (FETCH_NOTE):**
@@ -494,20 +534,14 @@
   - After 3 failures: cache message locally, retry when reconnected
 
 ### 3.5 Integration Testing
-- [ ] Real device testing: Emery or Gabbro paired with Android phone
-- [ ] Test flows:
-  - Short voice note → AI summarizes → summary displays on watch
-  - Long voice note (triggers chunking) → chunks reassemble correctly on watch
-  - Silence timeout → gentle error message on watch
-  - Rapid successive notes → each processed independently, no data corruption
-  - Phone offline during dictation → message queued, sent when reconnected
-  - Phone offline during summary push → summary queued, sent when reconnected
-  - Note title selection on watch → fetch body from phone → display
-  - Offline note viewing → cached body displays without phone connection
-- [ ] Test error states:
-  - AI summarization failure → raw text stored, "Failed — tap to retry" on phone
-  - Chunk timeout on watch → "Transfer failed — tap to retry"
-  - Duplicate message delivery → silently dropped, no duplicate notes created
+
+**See full test automation strategy in the [Test Automation Strategy](#test-automation-strategy) section.**
+
+- [ ] **End-to-end tests** (on real Android device + Pebble): Full flow from button press → dictation → AI summary → watch display — ~15 scenarios
+- [ ] **Disconnection tests**: Phone offline during dictation, phone offline during summary push, reconnect recovery
+- [ ] **Deduplication tests**: Duplicate NOTE_ID, duplicate MSG_ID, out-of-order chunks
+- [ ] **Offline tests**: Cached note body displayed without phone connection
+- [ ] **Error recovery**: Chunk timeout, CHUNK_RESET, AI failure, transfer failure
 
 ### 3.6 End-to-End Flow Verification
 - [ ] Button press on watch → dictation → text on phone → AI summarizes → title pushes to watch → body chunks push to watch → watch displays + vibrates
@@ -543,17 +577,537 @@
 - [ ] Watch: use lowest accelerometer sample rate if used (not currently planned)
 
 ### 4.3 Testing Suite
-- [ ] Watch app unit tests: chunk reassembly logic, note title storage, state machine transitions, deduplication
-- [ ] Flutter unit tests: DB operations, AI response parsing, provider config validation, plain text conversion, queue management
-- [ ] Flutter widget tests: list view, detail view, settings page, BYOK form
-- [ ] Integration tests: full pipeline with mocked AI responses, mocked PebbleKit responses
-- [ ] Manual QA checklist: all preset providers, Nano fallback, edge cases from above
+
+**See full test automation strategy in the [Test Automation Strategy](#test-automation-strategy) section.**
+
+Phase 4 testing consolidates and expands:
+
+- [ ] **Full regression suite**: Run all ~140+ tests (Phase 1 + 2 + 3) as a single CI pipeline
+- [ ] **Edge case tests**: 100+ notes on watch, 10K+ char dictation, rapid connect/disconnect, Bluetooth interruption recovery, app upgrade migration, multi-watch isolation, low-battery safe mode
+- [ ] **Performance profiling**: Memory leak detection after 100+ state transitions, battery impact measurement
+- [ ] **Manual QA checklist**: All cloud providers, Nano fallback, emulator vs real-device parity, schema migration verification
 
 ### 4.4 Platform Verification
 - [ ] Android device matrix: Pixel 8 (Nano), older Android (cloud fallback), Samsung, different screen sizes
 - [ ] Emulator testing: `emery` and `gabbro` emulators for UI verification
 - [ ] Build and release configuration (signing, versioning)
 - [ ] Schema migration test: verify Drift migrations work correctly when schema changes
+
+---
+
+## Test Automation Strategy
+
+This section defines the complete test automation strategy for all project phases. Each phase grows the test suite incrementally, with tests written alongside (or before) production code. The strategy is designed to run fast in local development and comprehensively in CI.
+
+### Test Philosophy
+
+1. **Tests are a deliverable** — exit criteria for each phase include passing tests
+2. **No testable code left behind** — every module, function, and UI screen has at least one automated test
+3. **Mocks over emulators** for speed during development; **real/emulator** tests for gate checks
+4. **Same test sources for both runtimes** where possible — write tests once, run on Node.js for dev speed, run on XS engine for CI validation
+
+### Test Architecture Overview
+
+```
+watch/
+├── src/embeddedjs/          # Production code (already exists)
+├── test/
+│   ├── unit/                # Pure-logic unit tests (no Pebble deps)
+│   │   ├── state.test.js
+│   │   ├── chunk.test.js
+│   │   ├── dictation.test.js
+│   │   └── messages.test.js
+│   ├── mocks/               # Mock Pebble API implementations
+│   │   ├── pebble-poco.js
+│   │   ├── pebble-timer.js
+│   │   ├── pebble-button.js
+│   │   ├── pebble-vibes.js
+│   │   ├── pebble-dictation.js
+│   │   ├── pebble-message.js
+│   │   ├── pebble-device.js
+│   │   └── pebble-screen.js
+│   ├── utils.js             # Test helpers, assertions
+│   └── runner.js            # Test runner entry point
+│
+companion/
+├── test/
+│   ├── unit/                # Dart unit tests
+│   │   ├── ai/
+│   │   │   ├── prompt_parser_test.dart
+│   │   │   ├── plain_text_converter_test.dart
+│   │   │   └── service_test.dart
+│   │   ├── db/
+│   │   │   └── notes_dao_test.dart
+│   │   ├── services/
+│   │   │   ├── communication_service_test.dart
+│   │   │   └── queue_manager_test.dart
+│   │   └── settings/
+│   │       └── provider_config_test.dart
+│   ├── widget/              # Flutter widget tests
+│   │   ├── note_list_test.dart
+│   │   ├── note_detail_test.dart
+│   │   └── settings_test.dart
+│   └── integration/         # End-to-end integration tests
+│       ├── watch_phone_integration_test.dart
+│       └── pebblekit_plugin_test.dart
+```
+
+### Tooling & Frameworks
+
+#### Watch App Tests
+
+| Environment | Runner | Purpose | Speed |
+|-------------|--------|---------|-------|
+| **Node.js** (dev loop) | Simplified logic runner | Fast feedback during development; state/logic validation | ~10ms/file |
+| **Pebble emulator** (manual gate) | `pebble install --emulator` + logs | Visual rendering, button mapping, timer/animations, layout | ~5s/run |
+
+**Simplified Logic Runner (`watch/test/logic_runner.js`):**
+- A lightweight, self-contained test script that tests non-UI modules (`state.js`, `chunk.js`, and the error parsing in `dictation.js`).
+- Minimal assertion helpers: `assertEqual` and `assertThrows`.
+- Avoids the extreme overhead of creating complex mock classes for `Poco`, `device`, `Timer`, or custom hardware vibes/buttons.
+- Pure state and parsing logic is tested with 100% precision without testing "the mock".
+
+**Emulator-driven Manual/Console Verification:**
+- For everything involving graphics (`Poco`), vibration, or button triggers, use the Pebble Emery & Gabbro Emulators directly.
+- The visual flow is straightforward, and runtime state can be verified perfectly in real-time via `pebble logs`.
+
+#### Flutter (Companion App) Tests
+
+| Environment | Framework | Purpose |
+|-------------|-----------|---------|
+| **Unit tests** | `package:test` + `mockito` | Pure Dart logic, DB operations, AI parsing, config validation |
+| **Widget tests** | `flutter_test` | UI component rendering, interaction, state transitions |
+| **Integration tests** | `integration_test` + mock PebbleKit | End-to-end watch↔phone flow on real Android device |
+
+Standard Flutter test tooling — no custom framework needed. Mockito for Dart-side mocking, `drift_dev` test helpers for in-memory SQLite during DB tests.
+
+---
+
+### Phase 1: Watch App Test Suite
+
+#### 1.8 Test Automation (was "Testing This Phase")
+
+**Unit Tests** (run on both Node.js + XS engine):
+
+##### `state.test.js` — State Machine
+```
+- [ ] getState() returns IDLE by default
+- [ ] transition() changes current state
+- [ ] transition() passes data to onStateChange callback
+- [ ] onStateChange() registers callback correctly
+- [ ] getData() returns accumulated state data
+- [ ] setData() merges new data into existing
+- [ ] clearData() resets to empty object
+- [ ] transition without data preserves existing stateData
+- [ ] All 7 states (IDLE→ERROR) transition correctly
+- [ ] Callback not called if not registered (no crash)
+- [ ] Multiple rapid transitions — last wins
+```
+
+##### `chunk.test.js` — Chunk Reassembly
+```
+- [ ] receiveChunk() starts reassembly when state is null
+- [ ] receiveChunk() validates CHUNK_TOTAL match — rejects mismatch
+- [ ] receiveChunk() validates CHUNK_INDEX sequence — rejects out-of-order (gap)
+- [ ] receiveChunk() validates CHUNK_INDEX sequence — rejects duplicate (index already received)
+- [ ] receiveChunk() accepts sequential chunks (0, 1, 2, ...)
+- [ ] receiveComplete() succeeds when all chunks received in order
+- [ ] receiveComplete() fails when chunks.length < expectedTotal
+- [ ] receiveComplete() fails when no reassembly state exists
+- [ ] receiveReset() clears all state and returns to idle
+- [ ] reset() clears reassemblyState and timeout timer
+- [ ] Chunk timeout fires after CHUNK_TIMEOUT_MS (10 seconds)
+- [ ] Chunk timeout resets on each new chunk
+- [ ] Single chunk + complete = success (1 total)
+- [ ] Empty chunk text handled correctly (empty string "")
+- [ ] Very large chunk (~7KB each) — total under 8192, accepted
+- [ ] Total payload > 8192 bytes guard — rejected
+- [ ] Unicode / multi-byte characters in chunk text
+- [ ] setOnTimeoutCallback registers and fires on timeout
+- [ ] receiveTitle() returns title object correctly
+```
+
+##### `dictation.test.js` — Dictation Error Mapping
+```
+- [ ] getErrorType("no speech" or "0") → "no_speech"
+- [ ] getErrorType(0) → "no_speech" (numeric error)
+- [ ] getErrorType("connectivity" / "network" / "phone") → "connectivity"
+- [ ] getErrorType("abort" / "cancel" / "system") → "aborted"
+- [ ] getErrorType("reject" / "permission" / "denied") → "rejected"
+- [ ] getErrorType(unknown string) → "internal_error"
+- [ ] getErrorType(null) → "unknown"
+- [ ] getErrorType(undefined) → "unknown"
+- [ ] getErrorMessage("no_speech") → "No speech detected"
+- [ ] getErrorMessage("connectivity") → "Phone not connected"
+- [ ] getErrorMessage("aborted") → "Try again"
+- [ ] getErrorMessage("rejected") → "" (empty, silent return)
+- [ ] getErrorMessage("internal_error") → "Error, try again"
+- [ ] getErrorMessage("unknown") → "Error, try again" (fallback)
+```
+
+##### `messages.test.js` — Message API Layer
+```
+- [ ] sendDictationResult() sets COMMAND=1 with RAW_TEXT + NOTE_ID + MSG_ID
+- [ ] sendDictationResult() increments outgoingMsgId each call
+- [ ] sendDictationResult() returns false when not connected
+- [ ] sendDictationResult() returns true on successful write
+- [ ] sendDictationResult() returns false on write exception
+- [ ] sendFetchNote() sets COMMAND=2 with NOTE_ID + MSG_ID
+- [ ] sendFetchNote() returns false when not connected
+- [ ] isConnected() reflects onWritable/onSuspend callbacks
+- [ ] getLastIncomingMsgId() / setLastIncomingMsgId() round-trip
+- [ ] onReadable() passes Map to callback
+- [ ] onWritable() sets connected=true, fires callback
+- [ ] onSuspend() sets connected=false, fires callback
+- [ ] MSG_ID deduplication: message with MSG_ID <= lastIncomingMsgId is dropped
+- [ ] MSG_ID deduplication: message with MSG_ID > lastIncomingMsgId is accepted
+```
+
+##### `storage.test.js` — File Storage (Node.js only; XS uses real device.files)
+```
+- [ ] init() creates index.json if missing, returns empty array
+- [ ] init() returns existing noteIds array
+- [ ] saveNoteTitle() writes meta.json file
+- [ ] saveNoteTitle() updates index.json with new ID at front
+- [ ] saveNoteTitle() deduplicates IDs (moves existing to front)
+- [ ] cacheNoteBody() writes body.txt file
+- [ ] getCachedNoteBody() returns stored body text
+- [ ] getCachedNoteBody() returns null for missing file
+- [ ] evictPreviousCachedBody() removes all .body.txt except currentId
+- [ ] getNoteMeta() returns parsed meta JSON
+- [ ] getNoteMeta() returns null for missing file
+- [ ] getAllNoteMetas() returns all metas in index order
+- [ ] getNoteIds() returns ID array from index
+```
+
+**Emulator Gate Tests** (manual, visual + log verification):
+```
+- [ ] App launches on emery emulator — renders IDLE screen
+- [ ] App launches on gabbro emulator — renders IDLE screen (round layout)
+- [ ] IDLE screen: "MindCorder" + "Tap to record" + connection dot
+- [ ] LISTENING screen: animated red indicator pulses
+- [ ] PROCESSING screen: "Processing..." + title appears when received
+- [ ] SUMMARY_READY screen: title + body text rendered
+- [ ] NOTELIST screen: note titles listed (or "No notes yet")
+- [ ] ERROR screen: error message + "Tap to dismiss"
+- [ ] Select press transitions: IDLE→LISTENING, LISTENING→IDLE, PROCESSING→IDLE, SUMMARY→IDLE, ERROR→IDLE
+- [ ] Up/Down press: IDLE→NOTELIST, SUMMARY→NOTELIST
+- [ ] Back press: NOTELIST→IDLE
+- [ ] Connection dot renders green/red based on mock connection state
+- [ ] Vibes.doublePulse() fires on summary receipt (mock verified)
+- [ ] Animation timer stops on state transitions (no orphan timers)
+```
+
+**Phase 1 CI:**
+```bash
+# Fast dev loop (Node.js)
+node watch/test/runner.js
+
+# XS engine validation (CI)
+pebble build && mcrun -m watch/test/manifest.json -t run
+
+# Emulator visual gate (manual)
+pebble install --emulator emery && pebble install --emulator gabbro
+```
+
+**Phase 1 Exit Criteria (updated):**
+- [ ] All unit tests pass on Node.js runner
+- [ ] All unit tests pass on XS engine (mcrun)
+- [ ] Emulator gate: app renders on both emery and gabbro
+- [ ] State machine handles all transitions (verified by tests)
+- [ ] Chunk reassembly passes all test cases (including edge cases)
+- [ ] Note title storage works (verified by mock file system tests)
+- [ ] Dictation error mapping covers all known error types
+
+---
+
+### Phase 2: Flutter Companion Test Suite
+
+**Unit Tests:**
+
+##### `prompt_parser_test.dart` — AI Response Parsing
+```
+- [ ] Valid JSON with title+body → parsed correctly
+- [ ] Valid JSON missing title → "Untitled" default
+- [ ] Valid JSON missing body → "No summary generated" default
+- [ ] Non-JSON response → entire text treated as body, title from first sentence
+- [ ] Empty response → both defaults applied
+- [ ] Markdown in body preserved (italics, bold, lists, headers)
+- [ ] Nested JSON in body field preserved as-is
+- [ ] Control characters stripped from parsed text
+- [ ] Very long title (100+ words) → truncated to first 8 words
+- [ ] Unicode / emoji in title and body
+```
+
+##### `plain_text_converter_test.dart` — Markdown → Plain Text
+```
+- [ ] **bold** → plain text (no markers)
+- [ ] *italic* → plain text (no markers)
+- [ ] - list item → • list item
+- [ ] * list item → • list item
+- [ ] # Header → HEADER (uppercase, no #)
+- [ ] ## Header → HEADER
+- [ ] Line breaks preserved
+- [ ] Mixed content (bold + list + headers) → all converted
+- [ ] Nested Markdown (**bold *italic***) → clean text
+- [ ] Code blocks (```) → stripped of backticks
+- [ ] Links [text](url) → text (no URL)
+- [ ] Already plain text → unchanged
+- [ ] Empty string → empty string
+```
+
+##### `notes_dao_test.dart` — Drift Database Operations
+```
+- [ ] Insert note → returns generated ID, all fields stored
+- [ ] insertNote() sets processing_status to 'pending'
+- [ ] allNotes() returns ordered by created_at DESC
+- [ ] allNotes() puts pinned notes first
+- [ ] updateSummary() updates title, body, plain_text, provider, status
+- [ ] archiveNote() sets is_archived=1
+- [ ] pinNote() sets is_pinned=1
+- [ ] getNoteById() returns correct note
+- [ ] getNoteByWatchId() finds by watch_id
+- [ ] getPendingNotes() returns only pending notes
+- [ ] Delete note (cascade) — body removed
+- [ ] Schema migration from v1 → v2 (future-proof test)
+- [ ] Concurrent writes (parallel insert) — no corruption
+```
+
+##### `aiservice_test.dart` — AI Orchestration Router
+```
+- [ ] GeminiNanoService.summarize() returns SummaryResult on success
+- [ ] GeminiNanoService.isAvailable() returns true when AICore ready
+- [ ] CloudAIService.summarize() sends correct HTTP request
+- [ ] CloudAIService.summarize() parses valid OpenAI-compatible response
+- [ ] CloudAIService.summarize() handles Anthropic response format
+- [ ] Router: Nano available → uses Nano path
+- [ ] Router: Nano unavailable + API key exists → uses cloud path
+- [ ] Router: Nano unavailable + no API key → status 'failed', prompt for key
+- [ ] Router: Nano succeeds → result stored, status 'completed'
+- [ ] Router: Nano fails with OOM → auto-retries with cloud path
+- [ ] Router: Cloud fails (network) → status 'failed', queue for retry
+- [ ] Router: Cloud fails (invalid key) → status 'failed', update UI
+- [ ] User preference "cloud only" → skips Nano check entirely
+```
+
+##### `provider_config_test.dart` — BYOK Settings
+```
+- [ ] ProviderConfig.fromPreset("openai") → correct base URL + default model
+- [ ] ProviderConfig.fromPreset("anthropic") → correct base URL + default model
+- [ ] ProviderConfig.fromPreset("custom") → empty, requires user input
+- [ ] API key stored/retrieved from secure storage
+- [ ] "Test Connection" sends minimal prompt, validates response
+- [ ] "Test Connection" fails gracefully on timeout, invalid key, bad URL
+- [ ] Preset toggle changes base URL + model field visibility
+```
+
+##### `settings_service_test.dart` — User Preferences
+```
+- [ ] AI mode toggle: "on-device" / "cloud" / "auto" persisted
+- [ ] Default mode is "auto" on fresh install
+- [ ] Provider selection persists across app restarts
+- [ ] API key masked by default, revealed on toggle
+```
+
+##### `queue_manager_test.dart` — Message Queue
+```
+- [ ] Outgoing message queued when watch not connected
+- [ ] Queue flushed on reconnection (FIFO order)
+- [ ] Queue persists across app restarts
+- [ ] Queue deduplicates messages with same MSG_ID
+- [ ] Maximum queue size enforced (oldest dropped)
+- [ ] Queue survives rapid connect/disconnect cycles
+```
+
+**Widget Tests** (Flutter UI components):
+```
+- [ ] NoteListPage: shows "No notes" empty state
+- [ ] NoteListPage: renders list of notes with titles + timestamps
+- [ ] NoteListPage: pinned notes appear first
+- [ ] NoteListPage: FAB triggers add-note flow
+- [ ] NoteListPage: swipe-to-archive removes from active list
+- [ ] NoteListPage: pull-to-refresh triggers refresh
+- [ ] NoteListPage: connection status indicator renders
+- [ ] NoteDetailPage: title + Markdown body rendered
+- [ ] NoteDetailPage: raw text expandable/collapsed
+- [ ] NoteDetailPage: processing status badge shows correct state
+- [ ] NoteDetailPage: archive, pin, delete, retry actions visible
+- [ ] SettingsPage: provider dropdown renders all presets
+- [ ] SettingsPage: API key field masks input
+- [ ] SettingsPage: "Test Connection" button shows result feedback
+- [ ] SettingsPage: AI mode toggle updates UI
+```
+
+##### `pebblekit_plugin_test.dart` — PebbleKit Plugin (Kotlin)
+```
+- [ ] PebbleBridgePlugin registers MethodChannel "mindcorder/pebble"
+- [ ] sendToWatch() calls DefaultPebbleSender.sendDataToPebble()
+- [ ] startAppOnWatch() calls sender.startAppOnTheWatch()
+- [ ] isWatchConnected() returns connection status
+- [ ] PebbleListenerService.onMessageReceived() parses PebbleDictionary
+- [ ] PebbleListenerService.onMessageReceived() forwards to Flutter via MethodChannel
+- [ ] PebbleListenerService.onMessageReceived() sends ACK to Pebble
+- [ ] EventChannel streams incoming messages to Dart
+- [ ] AndroidManifest service declaration present and correct
+```
+
+##### `communication_service_test.dart` — Watch↔Phone Protocol
+```
+- [ ] COMMAND=1 received → creates note, triggers AI
+- [ ] COMMAND=2 received → looks up note, sends body back
+- [ ] COMMAND=1 with duplicate NOTE_ID → dropped (dedup)
+- [ ] AI completes → title sent (COMMAND=10)
+- [ ] AI completes → body chunks sent (COMMAND=11 x N + COMMAND=12)
+- [ ] Body fits in single message → COMMAND=14 sent directly
+- [ ] Chunk splitting logic: screen-size body (>8KB) split correctly
+- [ ] MSG_ID increments monotonically on outgoing messages
+- [ ] Watch disconnected → outgoing messages queued
+- [ ] Watch reconnected → queue flushed
+```
+
+**Phase 2 CI:**
+```bash
+# Unit tests
+flutter test test/unit/
+
+# Widget tests
+flutter test test/widget/
+
+# Integration tests (requires Android device/emulator)
+flutter test integration_test/
+
+# Kotlin unit tests (JUnit)
+./gradlew test
+```
+
+**Phase 2 Exit Criteria (updated):**
+- [ ] All unit tests pass (Dart + Kotlin)
+- [ ] All widget tests pass
+- [ ] Drift DAO tests pass with in-memory DB
+- [ ] AI response parser handles all edge cases
+- [ ] Plain text converter covers all Markdown patterns
+- [ ] PebbleKit plugin compiles and MethodChannel verified
+- [ ] Communication protocol tests pass with mocked watch responses
+
+---
+
+### Phase 3: Integration Test Suite
+
+**End-to-End Integration Tests** (on real Android device + Pebble):
+
+##### `watch_phone_integration_test.dart`
+```
+- [ ] Watch app launches from phone (startAppOnWatch)
+- [ ] Button press on watch → dictation starts → raw text arrives at phone
+- [ ] Raw text → AI summarizes → summary pushes back to watch
+- [ ] Summary with title only (fits in single message) → displays on watch
+- [ ] Summary with long body (triggers chunking) → reassembles on watch
+- [ ] Chunk out-of-order: watch rejects, phone resends
+- [ ] Chunk timeout: watch errors, user can retry
+- [ ] CHUNK_RESET: clears watch state, phone resends full transfer
+- [ ] NOTE_ID deduplication: duplicate text → single note created
+- [ ] MSG_ID deduplication: duplicate message → silently dropped
+- [ ] FETCH_NOTE flow: select title on watch → body returns from phone
+- [ ] FETCH_NOTE offline: cached body displayed without phone
+- [ ] Note cache eviction: new note body replaces old cached body
+- [ ] Phone disconnected during dictation → queued on watch, sent on reconnect
+- [ ] Phone disconnected during summary push → queued on phone, sent on reconnect
+- [ ] Rapid succession notes (3 in 10 seconds) → each processed independently
+- [ ] Note list on watch shows correct order (most recent first)
+- [ ] Note metadata persists across watch app restart
+- [ ] Everyone wears Hardened Pants
+```
+
+**Phase 3 Exit Criteria (updated):**
+- [ ] All end-to-end flows pass on real Android device + Pebble emery/gabbro
+- [ ] No data loss during disconnection scenarios
+- [ ] Deduplication prevents double-processing
+- [ ] Chunk reassembly handles edge cases (timeout, out-of-order, reset)
+- [ ] Offline note viewing works with cached bodies
+- [ ] Queue survives app restarts on both watch and phone
+
+---
+
+### Phase 4: Regression Suite & Continuous Integration
+
+**Full Regression Test Suite:**
+```
+- [ ] Phase 1 watch logic unit tests (Node.js)
+- [ ] Phase 2 Flutter unit tests (Dart + Kotlin) — 60+ tests
+- [ ] Phase 2 widget tests — 15+ tests
+- [ ] Phase 3 end-to-end integration tests — 15+ tests
+- [ ] Combined snapshot
+```
+
+**CI/CD Pipeline** (GitHub Actions or equivalent):
+```yaml
+# .github/workflows/test.yml
+name: Test Suite
+on: [push, pull_request]
+
+jobs:
+  watch-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      - name: Watch unit tests (Node.js)
+        working-directory: watch
+        run: node test/logic_runner.js
+
+  flutter-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: 'temurin', java-version: '17' }
+      - uses: subosito/flutter-action@v2
+        with: { flutter-version: '3.32.x' }
+      - name: Flutter unit + widget tests
+        working-directory: mindcorder_companion
+        run: flutter test
+      - name: Build Android (compile check)
+        working-directory: mindcorder_companion
+        run: flutter build apk --debug
+```
+
+**Edge Case & Stress Tests (Phase 4):**
+```
+- [ ] 100+ notes in watch index → navigation still performant
+- [ ] 10K+ character dictation → chunked successfully
+- [ ] Rapid connect/disconnect cycles (10/min) → queue survives
+- [ ] Bluetooth interruption mid-transfer → recovery without data loss
+- [ ] Watch app upgrade (new version over old) → stored notes survive
+- [ ] Phone app upgrade → schema migration succeeds, no data loss
+- [ ] Multiple watches paired to same phone → each isolated
+- [ ] Very low battery (<5%) → app enters safe mode, no writes
+- [ ] Emulator vs real-device parity verified for all screen layouts
+- [ ] Memory profiling: no leaks after 100 state transitions
+```
+
+---
+
+### Test-Driven Development Workflow (Optional)
+
+Adopt TDD for critical/error-prone modules. Suggested priority order:
+
+| Priority | Module | Why TDD |
+|----------|--------|---------|
+| 1 | **chunk.js** | Complex state machine with timeout + sequence + validation logic; easy to get wrong |
+| 2 | **state.js** | Core of app behavior; all other modules depend on correct transitions |
+| 3 | **plain_text_converter.dart** | Easy to test, critical for watch display correctness |
+| 4 | **prompt_parser.dart** | LLM responses are unpredictable; parser must be robust |
+| 5 | **queue_manager.dart** | Persistence + ordering + dedup = easy to regress |
+| 6 | **communicationservice.dart** | Protocol correctness affects both watch and phone |
+
+TDD workflow per module:
+1. Write test cases for desired behavior (red)
+2. Implement minimal code to pass tests (green)
+3. Refactor while keeping tests green
+4. Add edge case tests → repeat
+
+All other modules: write tests immediately after implementation (not strictly TDD, but no merge without tests).
 
 ---
 

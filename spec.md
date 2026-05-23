@@ -53,7 +53,7 @@ The architecture enforces strict separation of concerns: the watch functions as 
 |                     PEBBLE TIME 2 / ROUND 2 (Wrist App)                           |
 |                                                                                   |
 |  +---------------------+      +---------------------+      +-------------------+  |
-|  |   Dictation API     | ---> |   AppMessage API    | ---> |  Piu UI Framework |  |
+|  |   Dictation API     | ---> |   AppMessage API    | ---> |  Poco Canvas UI   |  |
 |  |  (Alloy / JS)       |      |  (no PKJS)          |      |  (260x260 Circular)| |
 |  +---------------------+      +---------------------+      +-------------------+  |
 |         |                                                              |          |
@@ -107,10 +107,10 @@ v
 ### Component Breakdown
 
 #### A. Watch Layer (Alloy SDK / JavaScript)
-* **Dictation API**: Alloy's built-in dictation module (wraps Pebble OS dictation). Bypasses native confirmation dialogue for zero-friction flow (if API supports it). Buffer size set to `0` (unlimited), with practical session timeout of ~60 seconds. **Note:** Alloy dictation API capabilities must be verified against actual documentation before implementation — may differ from C SDK.
+* **Dictation API**: Alloy's built-in dictation module (wraps Pebble OS dictation). Requires user confirmation on-screen (via physical Select button) per native Alloy SDK constraints. Practical session timeout is ~30-60 seconds.
 * **AppMessage (no PKJS)**: Alloy's `Message` class handles watch-phone communication. Watch `package.json` includes `companionApp.android` section so Pebble routes messages directly to the companion app. **No `src/pkjs/index.js` is present.**
 * **Title-Only Storage**: The watch stores note metadata (ID, title, timestamp, pin/archive flags) as JSON files via Alloy's `device.files` API. Full note content lives on the phone. When a user selects a note title on the watch, the watch sends the note ID to the phone, which responds with the full pre-formatted plain text body. The most-recently-viewed note body is cached locally for offline access.
-* **Piu UI Framework**: Declarative, component-based UI framework for building screens. Handles circular layout automatically with proper edge padding for 260×260 round displays. Supports touch input on Emery and Gabbro.
+* **Poco Canvas UI**: Procedural canvas-based UI using `commodetto/Poco`. Handles circular layout manually with custom calculations for 260×260 round displays (Gabbro). Supports touchscreen input on Emery and Gabbro.
 * **Markdown**: The watch does NOT parse Markdown. The phone strips Markdown to plain text before sending. The watch receives pre-formatted text with explicit line breaks and bullet characters.
 
 #### B. Mobile Orchestration Layer (Flutter — Android)
@@ -138,7 +138,7 @@ v
 | Hardware / SDK Reality | App Strategy / Mitigation |
 | :--- | :--- |
 | **Dictation Timeout Window**<br>The Pebble Dictation engine cuts off automatically after several seconds of silence and sends audio to Pebble's servers for transcription. Practical limit is ~30–60 seconds per session. | The mobile app processes each chunk immediately when the session terminates. Users can immediately trigger an "append session" via a single button tap to continue dictation. |
-| **AppMessage Payload Limits**<br>Bluetooth buffers between Pebble and phone have explicit size limits. Modern SDK supports up to 8KB per message, but chunking is still needed for large summaries. | Large text sent from phone to watch is split into numbered chunks by the companion app. The watch reassembles segments before rendering. Timeout of 10 seconds between chunks prevents hung transfers. `CHUNK_RESET` command aborts failed transfers. |
+| **AppMessage Payload Limits**<br>Bluetooth buffers have explicit limits. While Emery/Gabbro support larger buffers, the watch's JS heap is highly constrained. Maximum chunk size is limited to 2KB (2048 bytes) to prevent watch-side heap fragmentation and OOM crashes. | Large text sent from phone to watch is split into numbered chunks of max 2KB by the companion app. The watch reassembles segments as raw bytes (using an ArrayBuffer) before converting to string. Timeout of 10 seconds between chunks prevents hung transfers. `CHUNK_RESET` command aborts failed transfers. |
 | **Alloy SDK Limited to Emery/Gabbro**<br>Alloy (JavaScript SDK) only supports Pebble Time 2 and Round 2. Older Pebbles (Classic, Time, Time Round) cannot run Alloy apps. | Target only Emery and Gabbro. Development and testing uses emulators (`pebble install --emulator emery` / `--emulator gabbro`) until physical devices are available. |
 | **PebbleKit JS and PebbleKit Android are mutually exclusive**<br>Per Pebble docs: "PebbleKit JS cannot be used in conjunction with PebbleKit Android or PebbleKit iOS." | Watch app has no `src/pkjs/index.js`. Messages route directly to companion app via PebbleKit Android 2. |
 | **Gemini Nano Android-Only**<br>AICore / Gemini Nano is only available on select Android devices (Pixel 8+, some Samsung). iOS has no equivalent on-device model. | iOS deferred to post-MVP. Android checks for AICore availability at startup; if unavailable, routes to cloud providers. |
@@ -150,25 +150,33 @@ v
 
 ## 5. Message Protocol
 
+### Handshake & Session Sync
+To avoid deadlock or duplicate lockout on reboots/reinstalls, the watch and companion app perform a startup handshake using **COMMAND=0**.
+- **SESSION_ID**: Epoch timestamp (`Date.now()`) of session start. Both devices track the active `SESSION_ID`. If a new session ID is received, expected message counters are reset to synchronize states.
+
 ### Watch → Phone
 
 | COMMAND | Fields | Description |
 |---------|--------|-------------|
-| 1 | `RAW_TEXT`, `NOTE_ID`, `MSG_ID` | New dictation result |
-| 2 | `NOTE_ID`, `MSG_ID` | Fetch note body by ID |
+| 0 | `SESSION_ID`, `MSG_ID` | Handshake sync initiation |
+| 1 | `RAW_TEXT`, `NOTE_ID`, `MSG_ID`, `SESSION_ID` | New dictation result |
+| 2 | `NOTE_ID`, `MSG_ID`, `SESSION_ID` | Fetch note body by ID |
 
 ### Phone → Watch
 
 | COMMAND | Fields | Description |
 |---------|--------|-------------|
-| 10 | `TITLE`, `MSG_ID` | Summary title (sent when processing starts) |
-| 11 | `SUMMARY_CHUNK`, `CHUNK_INDEX`, `CHUNK_TOTAL`, `MSG_ID` | Summary body chunk |
-| 12 | `COMPLETE`, `MSG_ID` | Transfer complete |
-| 13 | `CHUNK_RESET` | Abort current transfer |
-| 14 | `TITLE`, `BODY`, `MSG_ID` | Full note response (single message, fits in buffer) |
+| 0 | `SESSION_ID`, `MSG_ID` | Handshake sync ACK |
+| 10 | `TITLE`, `MSG_ID`, `SESSION_ID` | Summary title (sent when processing starts) |
+| 11 | `SUMMARY_CHUNK`, `CHUNK_INDEX`, `CHUNK_TOTAL`, `MSG_ID`, `SESSION_ID` | Summary body chunk (max 2KB) |
+| 12 | `COMPLETE`, `MSG_ID`, `SESSION_ID` | Transfer complete |
+| 13 | `CHUNK_RESET`, `SESSION_ID` | Abort current transfer |
+| 14 | `TITLE`, `BODY`, `MSG_ID`, `SESSION_ID` | Full note response (single message, fits in 2KB) |
 
-### Deduplication
+### Deduplication & Synchronization
 
-- Every message includes `MSG_ID` (monotonic counter from sender)
-- Receiver tracks `lastIncomingMsgId` — drops messages where `MSG_ID <= lastIncomingMsgId`
-- Phone also tracks `lastProcessedNoteId` — drops duplicate `RAW_TEXT` with same `NOTE_ID`
+- Every message includes `MSG_ID` (monotonic counter) and `SESSION_ID`.
+- Receiver tracks the last processed `SESSION_ID` and `lastIncomingMsgId`.
+- If the incoming message has a *newer* `SESSION_ID`, the receiver updates its tracked `SESSION_ID`, resets its `lastIncomingMsgId` baseline, and processes the message.
+- If the incoming message has the *same* `SESSION_ID` but `MSG_ID <= lastIncomingMsgId`, it is dropped as a duplicate.
+- Phone tracks `lastProcessedNoteId` to drop duplicate `RAW_TEXT` uploads with the same `NOTE_ID`.

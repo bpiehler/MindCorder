@@ -1,12 +1,10 @@
 {
  	"include":  [
- 		"$(MODDABLE)/examples/manifest_mod.json",
- 		"$(MODDABLE)/examples/manifest_typings.json"
- 	],
- 	"modules": {
-		"pebble/vibes": "./pebble/vibes",
-		"pebble/dictation": "./pebble/dictation",
- 		"*": [
+		"$(MODDABLE)/examples/manifest_mod.json",
+		"$(MODDABLE)/examples/manifest_typings.json"
+	],
+	"modules": {
+		"*": [
 			"./main",
 			"./state",
 			"./dictation",
@@ -14,5 +12,5 @@
 			"./storage",
 			"./chunk"
 		]
- 	}
+	}
 }

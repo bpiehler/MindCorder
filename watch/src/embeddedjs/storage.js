@@ -1,4 +1,4 @@
-import device from "embedded:provider/builtin"
+import device from "device"
 
 const NOTES_DIR = "/notes/"
 const INDEX_FILE = NOTES_DIR + "index.json"

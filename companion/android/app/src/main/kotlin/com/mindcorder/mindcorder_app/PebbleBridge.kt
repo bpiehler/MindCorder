@@ -23,12 +23,13 @@ object PebbleBridge {
         
         for (i in keys.indices) {
             val keyStr = keys[i]
-            val intVal = data.getInteger(i)
+            val mappedKey = 10000 + i
+            val intVal = data.getInteger(mappedKey)
             if (intVal != null) {
                 map[keyStr] = intVal.toInt() // Keep as Int for standard Dart json representation
                 continue
             }
-            val strVal = data.getString(i)
+            val strVal = data.getString(mappedKey)
             if (strVal != null) {
                 map[keyStr] = strVal
                 continue

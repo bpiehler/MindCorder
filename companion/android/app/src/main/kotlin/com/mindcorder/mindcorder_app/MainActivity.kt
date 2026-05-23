@@ -79,11 +79,12 @@ class MainActivity : FlutterActivity() {
         for ((key, value) in dataMap) {
             val keyIndex = keys.indexOf(key)
             if (keyIndex != -1) {
+                val mappedKey = 10000 + keyIndex
                 when (value) {
-                    is Int -> dict.addInteger(keyIndex, value.toLong())
-                    is Long -> dict.addInteger(keyIndex, value)
-                    is String -> dict.addString(keyIndex, value)
-                    is Boolean -> dict.addInteger(keyIndex, if (value) 1 else 0)
+                    is Int -> dict.addInteger(mappedKey, value.toLong())
+                    is Long -> dict.addInteger(mappedKey, value)
+                    is String -> dict.addString(mappedKey, value)
+                    is Boolean -> dict.addInteger(mappedKey, if (value) 1 else 0)
                 }
             }
         }

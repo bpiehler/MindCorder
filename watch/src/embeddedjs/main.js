@@ -1,5 +1,5 @@
 import Poco from "commodetto/Poco";
-import Vibes from "pebble/vibes";
+import * as Vibes from "pebble/vibes";
 import Button from "pebble/button";
 import * as state from "./state";
 import * as dictation from "./dictation";

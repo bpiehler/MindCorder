@@ -1,4 +1,4 @@
-import Dictation from "pebble/dictation"
+import { Dictation } from "pebble/dictation"
 
 let dictation = null
 let callbacks = {}

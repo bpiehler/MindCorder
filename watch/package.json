@@ -30,7 +30,8 @@
       "TITLE",
       "BODY",
       "COMPLETE",
-      "FETCH_NOTE"
+      "FETCH_NOTE",
+      "SESSION_ID"
     ],
     "companionApp": {
       "android": {

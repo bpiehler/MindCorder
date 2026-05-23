@@ -201,6 +201,7 @@ function handleIncomingMessage(msgMap) {
     let chunkIndex = null;
     let chunkTotal = null;
     let chunkText = null;
+    let incomingSessionId = null;
     
     msgMap.forEach((value, key) => {
         switch (key) {
@@ -211,29 +212,48 @@ function handleIncomingMessage(msgMap) {
             case "CHUNK_INDEX": chunkIndex = value; break;
             case "CHUNK_TOTAL": chunkTotal = value; break;
             case "SUMMARY_CHUNK": chunkText = value; break;
+            case "SESSION_ID": incomingSessionId = value; break;
         }
     });
     
-    if (msgId !== null && msgId <= messages.getLastIncomingMsgId()) {
-        return;
+    const activeSessionId = messages.getSessionId();
+    if (incomingSessionId !== null && incomingSessionId !== undefined) {
+        if (incomingSessionId > activeSessionId) {
+            messages.setSessionId(incomingSessionId);
+            messages.setLastIncomingMsgId(0);
+        } else if (incomingSessionId < activeSessionId) {
+            return;
+        } else {
+            if (msgId !== null && msgId <= messages.getLastIncomingMsgId()) {
+                return;
+            }
+        }
+    } else {
+        if (msgId !== null && msgId <= messages.getLastIncomingMsgId()) {
+            return;
+        }
     }
+    
     if (msgId !== null) {
         messages.setLastIncomingMsgId(msgId);
     }
     
     switch (command) {
+        case 0:
+            console.log("Handshake ACK received");
+            break;
         case 10:
             currentTitle = title;
             state.transition(state.PROCESSING, { title: title });
             break;
         case 11:
-            const result = chunk.receiveChunk(chunkIndex, chunkTotal, chunkText, msgId);
+            const result = chunk.receiveChunk(chunkIndex, chunkTotal, chunkText, msgId, incomingSessionId);
             if (result.error) {
                 state.transition(state.ERROR, { errorMessage: "Transfer failed" });
             }
             break;
         case 12:
-            const completeResult = chunk.receiveComplete();
+            const completeResult = chunk.receiveCompleteWithSession(incomingSessionId);
             if (completeResult.success) {
                 Vibes.doublePulse();
                 currentBody = completeResult.text;
@@ -321,6 +341,10 @@ function main() {
     });
     
     state.onStateChange(handleStateChange);
+    
+    chunk.setOnTimeoutCallback((err) => {
+        state.transition(state.ERROR, { errorMessage: "Transfer timeout" });
+    });
     
     new Button({
         types: ["select", "up", "down", "back"],

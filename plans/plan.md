@@ -21,69 +21,32 @@
 **Goal:** A watch app that captures dictation, sends text over AppMessage to the companion app, receives and displays pre-formatted summaries, and caches note titles locally. Testable with a mock data layer (simulated phone responses).
 
 ### 1.1 Project Scaffolding
-- [ ] Initialize Alloy project with `pebble new-project --alloy mindcorder`
-- [ ] Configure `package.json`:
-  ```json
-  {
-    "name": "MindCorder",
-    "version": "1.0.0",
-    "pebble": {
-      "displayName": "MindCorder",
-      "uuid": "<generate-unique-uuid>",
-      "projectType": "moddable",
-      "sdkVersion": "3",
-      "enableMultiJS": true,
-      "targetPlatforms": ["emery", "gabbro"],
-      "watchapp": { "watchface": false },
-      "messageKeys": [
-        "MSG_ID",
-        "COMMAND",
-        "RAW_TEXT",
-        "NOTE_ID",
-        "SUMMARY_CHUNK",
-        "CHUNK_INDEX",
-        "CHUNK_TOTAL",
-        "CHUNK_RESET",
-        "TITLE",
-        "BODY",
-        "COMPLETE",
-        "FETCH_NOTE"
-      ],
-      "companionApp": {
-        "android": {
-          "url": "https://play.google.com/store/apps/details?id=com.mindcorder.app",
-          "apps": [
-            { "package": "com.mindcorder.app" },
-            { "package": "com.mindcorder.app.debug" }
-          ]
-        }
-      }
-    }
-  }
+- [x] Initialize Alloy project with `pebble new-project --alloy mindcorder`
+  - Project auto-generated at `mindcorder/` then moved to `watch/`
+- [x] Configure `package.json` with UUID `E2ECDBEB-2D2B-412F-AD1D-9059180EBC47`
+- [x] Updated `messageKeys` and `companionApp.android` section
+- [x] Set `watchapp.watchface` to `false`
+- [x] `targetPlatforms`: `["emery", "gabbro"]`
+- [x] Project structure (actual):
   ```
-- [ ] Project structure:
-  ```
-  mindcorder/
+  watch/
     src/
       embeddedjs/
-        main.js              # App entry point
+        main.js              # App entry point (Poco rendering)
         manifest.json        # Module declarations
         state.js             # State machine
         dictation.js         # Dictation session management
         messages.js          # Message sending/receiving
         storage.js           # Note title file storage
         chunk.js             # Chunk reassembly logic
-        ui/
-          idle.js            # Idle screen
-          listening.js       # Listening screen
-          processing.js      # Processing screen
-          summary.js         # Summary display screen
-          notelist.js        # Note title list screen
-    resources/               # Images, fonts
     package.json             # App manifest
+    wscript                  # Pebble C build (modified — no PKJS)
   ```
-- [ ] **Do NOT create** `src/pkjs/index.js` — messages must route to the companion app, not PKJS
-- [ ] Set up build toolchain (`pebble build`)
+- [x] **No `src/pkjs/index.js`** — removed during scaffold
+- [x] **No `ui/` directory** — Poco renders directly in `main.js` (see Piu incompatibility below)
+- [x] Build toolchain verified: `pebble build` passes for emery and gabbro
+
+**Key architectural decision:** Piu UI framework **cannot be used** with Pebble's mod build. The `manifest_piu.json` include pulls in native C modules (e.g., `piuColumn.c`, `piuDie.c`) that the Pebble mod build system rejects with "mod cannot contain native code." **Poco** (`commodetto/Poco`) is used instead for all rendering. Screen rendering is procedural in `main.js` rather than separate Piu container modules.
 
 ### 1.2 AppMessage Communication Layer
 - [ ] **Watch side** (`embeddedjs/messages.js`):
@@ -115,24 +78,25 @@
   - Memory: pre-allocate a single `ArrayBuffer` of max size (8KB) for reassembly, reuse across transfers
 
 ### 1.3 Dictation Session
-- [ ] **Verify Alloy dictation API** against actual documentation before implementation. The Alloy SDK may have different API names than the C SDK. Key capabilities to verify:
-  - Can confirmation dialog be disabled? (`dictation_session_enable_confirmation` equivalent)
-  - Can error dialogs be disabled? (`dictation_session_enable_error_dialogs` equivalent)
-  - What are the status code names in Alloy/JS? (C SDK uses `DictationSessionStatusSuccess`, etc. — Alloy may use different constants)
-  - Does buffer size `0` mean unlimited in Alloy?
-  - **Fallback if Alloy dictation lacks these features:** Use the C SDK dictation API via `mdbl.c` entry point, or accept the confirmation dialog and adjust UX accordingly.
+- [x] **Alloy dictation API verified** (see `DEV_NOTES.md` for full details). Source: [hellodictation example](https://github.com/Moddable-OpenSource/pebble-examples/tree/main/hellodictation).
+  - `import Dictation from "pebble/dictation"` — native Alloy module, no C SDK fallback needed
+  - Constructor: `new Dictation({ onReadable() { this.read() }, onError(e) { ... } })`
+  - `this.read()` returns transcribed text string
+  - `dt.start()` begins dictation session
+  - ⚠️ **Confirmation dialog**: Alloy API does NOT expose `enable_confirmation()` — user must press Select to confirm each transcription. UX designed around this (adds one button press per session).
+  - ⚠️ **Error dialogs**: Unknown if Alloy supports disabling these. Handle in our UI regardless.
+  - ⚠️ **Error codes**: `onError(e)` receives an error value, but code names/values are unknown. Discover during testing.
+  - ⚠️ **Buffer size**: Alloy constructor takes only a config object — buffer size handled internally (likely unlimited).
 - [ ] Create dictation session on app launch (or lazily on first button press)
-- [ ] Disable confirmation dialog for zero-friction flow (if API supports it)
-- [ ] Disable error dialogs (handle errors in our own UI)
-- [ ] Callback: on success, generate a unique `NOTE_ID` (timestamp-based: `Date.now()`), send `COMMAND=1` + `RAW_TEXT` + `NOTE_ID` + `MSG_ID` via `message.write()`
-- [ ] Handle all status codes (use Alloy-specific names once verified):
-  - Success → send text to phone, transition to `PROCESSING`
-  - No speech detected → show "No speech detected", transition to `IDLE`
-  - Connectivity error → show "Phone not connected", transition to `IDLE`
-  - System aborted (too many errors) → show "Try again", transition to `IDLE`
-  - Internal error / recognizer error → show "Error, try again", transition to `IDLE`
-  - Transcription rejected → silently return to `IDLE`
-- [ ] Buffer size: use `0` (unlimited allocation) — Pebble's server-side transcription enforces a practical limit of ~30-60 seconds
+- [ ] Callback: on `onReadable()`, generate unique `NOTE_ID` (timestamp-based: `Date.now()`), send `COMMAND=1` + `RAW_TEXT` + `NOTE_ID` + `MSG_ID` via `message.write()`
+- [ ] Handle callbacks:
+  - `onReadable()` → transcription success → send text to phone, transition to `PROCESSING`
+  - `onError(e)` → show error message based on error value, transition to `IDLE`
+    - No speech detected → "No speech detected"
+    - Connectivity error → "Phone not connected"
+    - System aborted → "Try again"
+    - Internal error / recognizer error → "Error, try again"
+    - Transcription rejected → silently return to `IDLE`
 
 ### 1.4 State Machine
 - [ ] States and transitions (`embeddedjs/state.js`):
@@ -190,7 +154,7 @@
   - **Note list screen** (`ui/notelist.js`): Scrollable list of titles with timestamps, Up/Down navigation
 - [ ] Circular-aware layout: use Piu's layout system with proper padding from edges for the 260×260 round display
 - [ ] Touch support: Emery and Gabbro both have touchscreens — allow tap-to-scroll in summary and note list views
-- [ ] On summary receipt: `vibes_double_pulse()` (import from `pebble/vibration`)
+- [ ] On summary receipt: `Vibes.doublePulse()` (import from `pebble/vibes`)
 - [ ] **Markdown handling:** The phone strips Markdown to plain text before sending. The watch receives pre-formatted text with explicit line breaks and bullet characters (•, -, *). The watch does NOT parse Markdown.
 
 ### 1.6 Note Title Storage (File-Based)
@@ -634,8 +598,12 @@ Each phase has clear exit criteria that don't depend on subsequent phases. Pause
 
 | Risk | Severity | Mitigation |
 |------|----------|------------|
-| **Alloy dictation API may lack C SDK features** | Medium | Verify API before Phase 1 implementation. Fallback to C SDK dictation via `mdbl.c` if needed. |
+| **Alloy dictation API lacks C SDK features** | Medium | ✅ API confirmed via `import Dictation from "pebble/dictation"` (hellodictation example). Confirmation dialog likely cannot be disabled — UX designed around it. Error codes unknown, will discover during testing. No C SDK fallback needed. |
 | **`gemini_nano_android` package abandonment** | Medium | Abstract behind `AIService` interface. Cloud fallback always available. |
 | **PebbleKit Android 2 is new (11 stars)** | Low | Official Pebble project (`pebble-dev` org). Apache-2.0 license. Active development (64 commits, latest Apr 2026). |
 | **Emulator testing without PKJS** | Low | Phase 1 emulator tests cover watch-side logic. Real-device PKJS testing moves to Phase 3. |
 | **iOS deferred** | Low | Explicitly out of scope for Phase 1-3. Architecture supports later addition. |
+| **Message sending requires phone-initiated message first** | Medium | Per Alloy docs: "The `Messages` class on Pebble OS allows sending messages from the watch to the phone only after receiving a message from the phone." The companion app must send an initial "ready" message before the watch can send dictation results. Phase 2 must implement this handshake. |
+| **`watch.connected.pebblekit` flag without PKJS** | Low | Since we don't use PKJS, this flag may always be false. Connection status may need to rely on `onWritable`/`onSuspend` callbacks from the Message instance instead. |
+| **Message sending requires phone-initiated message first** | Medium | Per Alloy docs: "The `Messages` class on Pebble OS allows sending messages from the watch to the phone only after receiving a message from the phone." The companion app must send an initial "ready" message before the watch can send dictation results. Phase 2 must implement this handshake. |
+| **`watch.connected.pebblekit` flag without PKJS** | Low | Since we don't use PKJS, this flag may always be false. Connection status may need to rely on `onWritable`/`onSuspend` callbacks from the Message instance instead. |

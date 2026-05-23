@@ -4,13 +4,6 @@
 		"$(MODDABLE)/examples/manifest_typings.json"
 	],
 	"modules": {
-		"*": [
-			"./main",
-			"./state",
-			"./dictation",
-			"./messages",
-			"./storage",
-			"./chunk"
-		]
+		"*": "./main"
 	}
 }

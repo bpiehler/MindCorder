@@ -1,0 +1,258 @@
+import 'dart:async';
+import 'dart:convert';
+import 'package:flutter/services.dart';
+import 'package:drift/drift.dart';
+import '../data/database.dart';
+import '../ai/ai_service.dart';
+import '../ai/parser.dart';
+
+class PebbleService {
+  static const _methodChannel = MethodChannel('mindcorder/pebble_methods');
+  static const _eventChannel = EventChannel('mindcorder/pebble_events');
+
+  final AppDatabase database;
+  final AIService aiService;
+
+  int _sessionId = DateTime.now().millisecondsSinceEpoch;
+  int _outgoingMsgId = 1000;
+  int _lastProcessedNoteId = 0;
+
+  StreamSubscription? _eventSubscription;
+
+  PebbleService({
+    required this.database,
+    required this.aiService,
+  });
+
+  /// Starts listening to Pebble watch messages.
+  void start() {
+    _eventSubscription = _eventChannel.receiveBroadcastStream().listen(
+      (event) {
+        if (event is Map) {
+          final castedEvent = Map<String, dynamic>.from(event);
+          handleWatchMessage(castedEvent);
+        }
+      },
+      onError: (err) {
+        print("Pebble EventChannel Error: $err");
+      },
+    );
+  }
+
+  /// Stops listening to watch messages.
+  void stop() {
+    _eventSubscription?.cancel();
+  }
+
+  Future<bool> isWatchConnected() async {
+    try {
+      return await _methodChannel.invokeMethod<bool>('isWatchConnected') ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<void> startWatchApp() async {
+    try {
+      await _methodChannel.invokeMethod('startAppOnWatch');
+    } catch (_) {}
+  }
+
+  Future<void> stopWatchApp() async {
+    try {
+      await _methodChannel.invokeMethod('stopAppOnWatch');
+    } catch (_) {}
+  }
+
+  Future<void> sendMapToWatch(Map<String, dynamic> data) async {
+    try {
+      await _methodChannel.invokeMethod('sendToWatch', data);
+    } catch (e) {
+      print("Failed to send message to Pebble: $e");
+    }
+  }
+
+  Future<void> handleWatchMessage(Map<String, dynamic> msg) async {
+    final command = msg['COMMAND'] as int?;
+    final msgId = msg['MSG_ID'] as int?;
+    final incomingSessionId = msg['SESSION_ID'] as int?;
+
+    print("Received Command $command with msgId $msgId from Watch");
+
+    if (command == null) return;
+
+    // Acknowledge session changes
+    if (incomingSessionId != null && incomingSessionId > _sessionId) {
+      _sessionId = incomingSessionId;
+    }
+
+    switch (command) {
+      case 0:
+        // Handshake protocol initiation
+        print("Handshake received from Watch. Sending Handshake ACK.");
+        await sendMapToWatch({
+          'COMMAND': 0,
+          'SESSION_ID': _sessionId,
+          'MSG_ID': _outgoingMsgId++,
+        });
+        break;
+
+      case 1:
+        // New dictation transcript upload
+        final rawText = msg['RAW_TEXT'] as String?;
+        final noteId = msg['NOTE_ID'] as int?;
+
+        if (rawText == null || noteId == null) return;
+        if (noteId == _lastProcessedNoteId) {
+          print("Duplicate Note ID $noteId detected. Dropping.");
+          return;
+        }
+        _lastProcessedNoteId = noteId;
+
+        await _processNewNoteDictation(rawText, noteId);
+        break;
+
+      case 2:
+        // Fetch full note body request
+        final noteId = msg['NOTE_ID'] as int?;
+        if (noteId == null) return;
+        await _handleFetchNoteRequest(noteId);
+        break;
+    }
+  }
+
+  Future<void> _processNewNoteDictation(String rawText, int watchId) async {
+    // 1. Write the raw note to the Drift DB
+    final companion = NotesCompanion.insert(
+      watchId: Value(watchId),
+      createdAt: Value(DateTime.now()),
+      rawText: rawText,
+      processingStatus: const Value('processing'),
+    );
+    final dbId = await database.insertNote(companion);
+
+    // 2. Notify the watch that we are summarizing
+    await sendMapToWatch({
+      'COMMAND': 10, // Summary Title
+      'TITLE': 'Summarizing...',
+      'SESSION_ID': _sessionId,
+      'MSG_ID': _outgoingMsgId++,
+    });
+
+    try {
+      // 3. Summarize raw text
+      final result = await aiService.summarize(rawText);
+
+      // 4. Pre-format for Pebble OS
+      final plainTextBody = AIParser.convertMarkdownToPlainText(result.body);
+
+      // 5. Update DB
+      final originalNote = await database.getNoteById(dbId);
+      if (originalNote != null) {
+        await database.updateNoteEntry(originalNote.copyWith(
+          summaryTitle: Value(result.title),
+          summaryBody: Value(result.body),
+          bodyPlainText: Value(plainTextBody),
+          aiProvider: Value(result.provider),
+          processingStatus: 'completed',
+        ));
+      }
+
+      // 6. Push the completed summary to the watch
+      await _sendSummaryToWatch(result.title, plainTextBody);
+
+    } catch (e) {
+      print("AI Summarization failed: $e");
+      
+      // Update DB to failed
+      final originalNote = await database.getNoteById(dbId);
+      if (originalNote != null) {
+        await database.updateNoteEntry(originalNote.copyWith(
+          processingStatus: 'failed',
+          summaryTitle: const Value('Failed'),
+          summaryBody: Value('Summarization failed: $e'),
+        ));
+      }
+
+      // Notify watch to abort/reset reassembly
+      await sendMapToWatch({
+        'COMMAND': 13, // CHUNK_RESET
+        'SESSION_ID': _sessionId,
+        'MSG_ID': _outgoingMsgId++,
+      });
+    }
+  }
+
+  Future<void> _handleFetchNoteRequest(int watchId) async {
+    final note = await database.getNoteByWatchId(watchId);
+    if (note == null) {
+      // Return not found
+      await _sendSummaryToWatch('Not Found', 'The requested note could not be found.');
+      return;
+    }
+
+    final title = note.summaryTitle ?? 'Untitled';
+    final body = note.bodyPlainText ?? note.summaryBody ?? 'No content';
+    await _sendSummaryToWatch(title, body);
+  }
+
+  Future<void> _sendSummaryToWatch(String title, String bodyPlainText) async {
+    final utf8Bytes = utf8.encode(bodyPlainText);
+    final totalLength = utf8Bytes.length;
+
+    // Standard Alloy maximum buffer chunk size is 2KB (2048 bytes)
+    const maxChunkSize = 2000; 
+
+    if (totalLength <= maxChunkSize) {
+      // Small payload: send in a single COMMAND=14 packet
+      await sendMapToWatch({
+        'COMMAND': 14,
+        'TITLE': title,
+        'BODY': bodyPlainText,
+        'SESSION_ID': _sessionId,
+        'MSG_ID': _outgoingMsgId++,
+      });
+    } else {
+      // Large payload: split into chunks and send via sequential COMMAND=11 packets
+      final chunks = <List<int>>[];
+      for (var i = 0; i < totalLength; i += maxChunkSize) {
+        final end = (i + maxChunkSize < totalLength) ? i + maxChunkSize : totalLength;
+        chunks.add(utf8Bytes.sublist(i, end));
+      }
+
+      final chunkTotal = chunks.length;
+
+      // Send the summary title first to update watch UI state
+      await sendMapToWatch({
+        'COMMAND': 10,
+        'TITLE': title,
+        'SESSION_ID': _sessionId,
+        'MSG_ID': _outgoingMsgId++,
+      });
+
+      // Send each chunk sequentially
+      for (var index = 0; index < chunkTotal; index++) {
+        final chunkText = utf8.decode(chunks[index]);
+        await sendMapToWatch({
+          'COMMAND': 11,
+          'SUMMARY_CHUNK': chunkText,
+          'CHUNK_INDEX': index,
+          'CHUNK_TOTAL': chunkTotal,
+          'SESSION_ID': _sessionId,
+          'MSG_ID': _outgoingMsgId++,
+        });
+        
+        // Minor delay to prevent message buffer choke on high-throughput transfers
+        await Future.delayed(const Duration(milliseconds: 100));
+      }
+
+      // Send completed packet signal
+      await sendMapToWatch({
+        'COMMAND': 12,
+        'COMPLETE': 1,
+        'SESSION_ID': _sessionId,
+        'MSG_ID': _outgoingMsgId++,
+      });
+    }
+  }
+}

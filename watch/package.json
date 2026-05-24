@@ -12,7 +12,8 @@
     "sdkVersion": "3",
     "targetPlatforms": [
       "emery",
-      "gabbro"
+      "gabbro",
+      "basalt"
     ],
     "watchapp": {
       "watchface": false

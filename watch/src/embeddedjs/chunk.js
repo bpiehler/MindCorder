@@ -5,7 +5,7 @@ let reassemblyState = null
 let timeoutTimer = null
 
 export function reset() {
-    clearTimeout()
+    cancelTimeout()
     reassemblyState = null
 }
 
@@ -17,7 +17,7 @@ export function startReassembly(expectedTotal, sessionId) {
         msgId: null,
         sessionId: sessionId
     }
-    clearTimeout()
+    cancelTimeout()
     return reassemblyState
 }
 
@@ -88,19 +88,19 @@ export function receiveTitle(title) {
 }
 
 function restartTimeout() {
-    clearTimeout()
-    timeoutTimer = Timer.set(CHUNK_TIMEOUT_MS, false, () => {
+    if (timeoutTimer) clearTimeout(timeoutTimer)
+    timeoutTimer = setTimeout(() => {
         const error = { error: "TIMEOUT" }
         if (reassemblyState && reassemblyState.onTimeout) {
             reassemblyState.onTimeout(error)
         }
         reset()
-    })
+    }, CHUNK_TIMEOUT_MS)
 }
 
-function clearTimeout() {
+function cancelTimeout() {
     if (timeoutTimer) {
-        Timer.clear(timeoutTimer)
+        clearTimeout(timeoutTimer)
         timeoutTimer = null
     }
 }

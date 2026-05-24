@@ -31,22 +31,30 @@
   ```
   watch/
     src/
+      c/
+        mdbl.c               # C entry point — bootstraps XS engine
+        dictation.c           # Native C bridge: Pebble dictation API → XS
+        vibes.c               # Native C bridge: Pebble vibes API → XS
       embeddedjs/
-        main.js              # App entry point (Poco rendering)
-        manifest.json        # Module declarations
-        state.js             # State machine
-        dictation.js         # Dictation session management
-        messages.js          # Message sending/receiving
-        storage.js           # Note title file storage
-        chunk.js             # Chunk reassembly logic
-    package.json             # App manifest
-    wscript                  # Pebble C build (modified — no PKJS)
+        main.js               # App entry point (Poco rendering)
+        manifest.json         # Module declarations
+        state.js              # State machine
+        dictation.js           # JS wrapper around native dictation bridge
+        messages.js           # Message sending/receiving
+        storage.js            # Note title file storage
+        chunk.js              # Chunk reassembly logic
+    package.json              # App manifest
+    wscript                   # Pebble C build (js=/js_entry_file= REQUIRED)
   ```
 - [x] **No `src/pkjs/index.js`** — removed during scaffold
 - [x] **No `ui/` directory** — Poco renders directly in `main.js` (see Piu incompatibility below)
 - [x] Build toolchain verified: `pebble build` passes for emery and gabbro
+- [x] **Startup/memory configuration**: `mdbl.c` uses custom `ModdableCreationRecord` with slot=65536 (64KB), chunk=16384 (16KB), stack=4096 (4KB). Platform defaults (32KB/8KB/384) crash on app startup. See `DEV_NOTES.md` for details.
+- [ ] **Native C bridges** for dictation and vibes: Write C-native XS modules (`dictation.c`, `vibes.c`) following the same pattern as the existing `pebblebutton.c`/`pebblebutton.js` in the SDK. Each bridge wraps the Pebble C SDK API (`dictation_session`, `vibes_double_pulse`) and exposes it as a JS class with the same API surface used in the plan. Include the JS wrappers (`dictation.js`, imported as `./dictation` instead of `pebble/dictation`).
 
 **Key architectural decision:** Piu UI framework **cannot be used** with Pebble's mod build. The `manifest_piu.json` include pulls in native C modules (e.g., `piuColumn.c`, `piuDie.c`) that the Pebble mod build system rejects with "mod cannot contain native code." **Poco** (`commodetto/Poco`) is used instead for all rendering. Screen rendering is procedural in `main.js` rather than separate Piu container modules.
+
+**Key architectural decision #2: Native C bridges for missing Moddable modules.** The Pebble Moddable platform does not include JS wrappers for `pebble/dictation` or `pebble/vibes`. These must be implemented as native C bridges (C code compiled into the watch binary, exposed to JS via XS native function registration). The pattern is established by the existing `pebble/button` module (see SDK at `build/devices/pebble/modules/button/pebblebutton.c` + `pebblebutton.js`). The `"device"` module (`embedded:provider/builtin`) also requires explicit inclusion in the manifest or a direct import path (e.g., `embedded:storage/files` for file I/O).
 
 ### 1.2 AppMessage Communication Layer
 - [ ] **Watch side** (`embeddedjs/messages.js`):
@@ -80,16 +88,19 @@
   - Timeout: 10 seconds between chunks — on timeout, clear state, call the registered timeout callback which transitions the app state to `ERROR` state with message "Transfer failed — tap to retry"
   - Maximum total payload: guard against buffer overflow — if `CHUNK_TOTAL * 2048 > 8192` bytes, reject and request reset
 
-### 1.3 Dictation Session
-- [x] **Alloy dictation API verified** (see `DEV_NOTES.md` for full details). Source: [hellodictation example](https://github.com/Moddable-OpenSource/pebble-examples/tree/main/hellodictation).
-  - `import Dictation from "pebble/dictation"` — native Alloy module, no C SDK fallback needed
+### 1.3 Dictation Session (Native C Bridge)
+
+The Pebble Moddable platform does not include a built-in `pebble/dictation` JS module. Dictation is provided via a native C bridge compiled into `src/c/dictation.c`, wrapped by `src/embeddedjs/dictation.js`.
+
+- [ ] **C bridge** (`src/c/dictation.c`): Registers XS native functions following the pattern of `pebblebutton.c` in the SDK. Wraps the Pebble C SDK `dictation_session_create()`, `dictation_session_start()`, and `dictation_session_destroy()` APIs.
+- [ ] **JS wrapper** (`src/embeddedjs/dictation.js`): Imports and wraps the native bridge with the same API surface:
+  - `import Dictation from "./dictation"` (our bridge, not `pebble/dictation`)
   - Constructor: `new Dictation({ onReadable() { this.read() }, onError(e) { ... } })`
   - `this.read()` returns transcribed text string
   - `dt.start()` begins dictation session
-  - ⚠️ **Confirmation dialog**: Alloy API does NOT expose `enable_confirmation()` — user must press Select to confirm each transcription. UX designed around this (adds one button press per session).
-  - ⚠️ **Error dialogs**: Unknown if Alloy supports disabling these. Handle in our UI regardless.
-  - ⚠️ **Error codes**: `onError(e)` receives an error value, but code names/values are unknown. Discover during testing.
-  - ⚠️ **Buffer size**: Alloy constructor takes only a config object — buffer size handled internally (likely unlimited).
+  - ⚠️ **Confirmation dialog**: Not exposed via JS bridge. User must press Select to confirm each transcription.
+  - ⚠️ **Error dialogs**: Not exposed via JS. Handle errors in our UI.
+  - ⚠️ **Error codes**: Discover error values during testing — map to our error types in `getErrorType()`.
 - [ ] Create dictation session on app launch (or lazily on first button press)
 - [ ] Callback: on `onReadable()`, generate unique `NOTE_ID` (timestamp-based: `Date.now()`), send `COMMAND=1` + `RAW_TEXT` + `NOTE_ID` + `MSG_ID` via `message.write()`
 - [ ] Handle callbacks:
@@ -157,11 +168,11 @@
   - **Note list screen**: Scrollable list of titles with date/timestamp, responding to Up/Down hardware button presses.
 - [ ] Circular-aware layout: Calculate coordinates manually with padding (e.g. `PADDING = 20`) to keep all text and shapes safe inside the Gabbro circular boundary (260×260).
 - [ ] Touch support: Support touchscreen scroll/tap actions on Emery and Gabbro.
-- [ ] On summary receipt: Call `Vibes.doublePulse()` (imported from `pebble/vibes`).
+- [ ] On summary receipt: Call `Vibes.doublePulse()` (imported from our native bridge `./vibes.js`, which wraps `src/c/vibes.c` — see 1.1). The Pebble Moddable platform does not include a built-in `pebble/vibes` module.
 - [ ] **Markdown handling:** The companion app on the phone strips Markdown to plain text before sending. The watch receives pre-formatted text with explicit line breaks and bullet characters (•). The watch does NOT parse Markdown.
 
 ### 1.6 Note Title Storage (File-Based)
-- [ ] Import file system API (`device.files`)
+- [ ] Import file system API via the correct Pebble module path: `import files from "embedded:storage/files"` (the `"device"` module alias used in standard Moddable is not available on Pebble; use the underlying module directly).
 - [ ] Store note metadata as JSON files:
   ```
   /notes/

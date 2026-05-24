@@ -178,6 +178,57 @@ Color functions: `blendColors`, `hsl`, `hsla`, `rgb`, `rgba`
 | Roboto | Bold | 49 |
 | Roboto Condensed | Regular | 21 |
 
+## Native C Module Bridge Pattern
+
+The Pebble Moddable platform only includes a subset of Moddable's standard modules. Several commonly-used modules are **missing** from the Pebble build:
+
+- **`pebble/dictation`** — NOT available as a built-in module
+- **`pebble/vibes`** — NOT available as a built-in module
+- **`"device"`** — NOT available as a standard module alias (use `embedded:storage/files` directly for file I/O, `embedded:storage/key-value` for preferences)
+
+**Available** Pebble-native JS modules (built-in, no bridge needed):
+
+- `pebble/button` — Button input (see `build/devices/pebble/modules/button/`)
+- `pebble/message` — AppMessage communication (see `build/devices/pebble/modules/message/`)
+- `commodetto/Poco` — Low-level canvas rendering
+- `Timer` (global) — setTimeout, Timer.set, Timer.repeat, Timer.delay, etc.
+- `watch` (global) — Connection status, platform info
+
+### Bridge Implementation Pattern
+
+Follow the pattern established by the existing `pebble/button` module:
+
+```
+src/c/dictation.c           # C code compiled into the watch binary
+src/embeddedjs/dictation.js  # JS wrapper imported by application code
+```
+
+The C file registers XS native functions that wrap the Pebble C SDK API. The JS file imports the native module and wraps it in a class with the expected API surface.
+
+**Reference implementation:** `build/devices/pebble/modules/button/pebblebutton.c` + `pebblebutton.js` in the SDK.
+
+**Key XS native function signature (C side):**
+```c
+void xs_pebbledictation(xsMachine *the) {
+    // Access JS args with xs* functions
+    // Call Pebble C SDK APIs
+    // Return values or call JS callbacks
+}
+```
+
+**Key JS wrapper pattern (JS side):**
+```js
+class Dictation extends Native("xs_pebbledictation_destructor") {
+    constructor(options) { super(); native("xs_pebbledictation").call(this, options); }
+    start() { native("xs_pebbledictation_start").call(this); }
+}
+export default Dictation;
+```
+
+### JS console.log Not Visible in pebble logs
+
+`console.log` output from JS is routed through `modLog_transmit()` → `APP_LOG(APP_LOG_LEVEL_DEBUG_VERBOSE, ...)` which is filtered out by the default log level threshold (`APP_LOG_LEVEL_DEBUG=200` vs `DEBUG_VERBOSE=255`). The `pebble logs -v` flag controls tool verbosity, not firmware log level. For debugging, use on-screen visual indicators or throw unhandled exceptions (which route through `APP_LOG_LEVEL_ERROR`).
+
 ## XS Engine Limitations (Hardened JavaScript)
 
 Omitted features (will throw "dead strip" exception):
@@ -197,20 +248,86 @@ Piu CANNOT be used in Pebble Alloy apps. Including `manifest_piu.json` in `src/e
 
 **manifest.json:** Must include only `manifest_mod.json` and `manifest_typings.json` — do NOT include `manifest_piu.json`.
 
-## Build System Notes
+## Runtime Startup & Memory Configuration
 
-1. **wscript modification required:** The generated wscript includes a `pbl_bundle` call with `js=` parameter referencing PKJS. Since this project uses no PKJS (messages route directly to companion app), the `js=` parameter must be removed:
-   ```python
-   # BEFORE (generated):
-   ctx.pbl_bundle(binaries=binaries,
-                  js=ctx.path.ant_glob(['src/pkjs/**/*.js', ...]),
-                  js_entry_file='src/pkjs/index.js')
-   
-   # AFTER (fixed):
-   ctx.pbl_bundle(binaries=binaries)
-   ```
+### ModdableCreationRecord (Custom Record Required)
 
-2. **manifest.json** references `manifest_mod.json` and `manifest_typings.json` only. Each module file MUST be listed in the `modules` array.
+Our app uses 6 modules + the full XS runtime. The Pebble platform defaults (static=32768, chunk=8192, stack=384) are insufficient. A custom `ModdableCreationRecord` is required:
+
+```c
+ModdableCreationRecord record = {
+    .recordSize = sizeof(ModdableCreationRecord),
+    .slot = 65536,    // 64KB slot heap (double platform default)
+    .chunk = 16384,   // 16KB chunk heap (double platform default)
+    .stack = 4096,    // 4KB JS call stack (10x platform default)
+    .flags = 0
+};
+moddable_createMachine(&record);
+```
+
+**WARNING:** `moddable_createMachine(NULL)` uses platform defaults and will crash with `Slot allocation: failed for 1024 bytes` or `stack overflow` for multi-module apps.
+
+**WARNING:** With a custom record, `moddable_createMachine` returns immediately. You MUST call `app_event_loop()` to keep the app alive. Do NOT use `moddable_createMachine(NULL)` as the pattern — it only works for trivial single-module apps.
+
+### Manifest `creation` Section
+
+The `"creation"` section in `manifest.json` (`"static"`, `"chunk"`, `"stack"`) is used ONLY by the Moddable build system (mcrun/xsc). The Pebble firmware's `moddable_createMachine(NULL)` ignores these values and uses hardcoded platform defaults. Use the custom C record above for memory control.
+
+### JS Globals on Pebble
+
+The Pebble Moddable platform runs JS in a Compartment. Available globals:
+
+| Global | JS API | C API |
+|--------|--------|-------|
+| `setTimeout(fn, ms)` | one-shot timer | `Timer.set(fn, ms)` |
+| `setInterval(fn, ms)` | repeating timer | `Timer.repeat(fn, ms)` |
+| `clearTimeout(id)` | cancel timer | `Timer.clear(id)` |
+| `clearInterval(id)` | cancel interval | `Timer.clear(id)` |
+| `console.log(msg)` | debug output | routes through `modLog_transmit` |
+| `screen` | Poco display driver | `pebble/display` |
+
+**NOT globals:** `Timer` (use setTimeout/setInterval), `setImmediate` (not available), `Date` (use `Date.now()` which IS available).
+
+### JS console.log Visibility
+
+`console.log` output routes through `modLog_transmit()` → `APP_LOG(APP_LOG_LEVEL_DEBUG_VERBOSE, ...)` which is filtered by default. **It DOES appear** in `pebble logs` when the app uses `app_event_loop()` (custom record path). When `moddable_createMachine(NULL)` is used, the output goes to xsbug protocol instead.
+
+## Font Limitations
+
+**Leco fonts are numbers-only on Pebble.** All Leco variants map to `FONT_KEY_*_NUMBERS` and contain only digits (0-9). Using Leco for text strings will crash `drawText()` with `xsArg(0): invalid index` because the font has no glyphs for letters.
+
+Use **Gothic** font family for text rendering:
+- `Gothic-Bold` at 14, 18, 24, 28, 36 (full character support)
+- `Gothic-Regular` at 9, 14, 18, 24, 28, 36 (full character support)
+
+## Round Display (Gabbro) Layout
+
+The gabbro display is 260×260 (square buffer) with a **200px diameter round viewport** centered at (130, 130). The masked areas start at x=0-30 and x=230-260, y=0-30 and y=230-260.
+
+Use `ROUND_MASK = 32` as a safe margin for all visible content. Center text with `(SCREEN_SIZE - getTextWidth(text, font)) / 2`.
+
+## Poco Rendering Quirks on Pebble
+
+### screen.adaptInvalid() CRASHES
+
+Do NOT call `screen.adaptInvalid()`. It crashes with `C: xsArg(0): invalid index` when called from timer callbacks (e.g., `setTimeout`), and silently fails when wrapped in try/catch. `render.end()` alone is sufficient — it internally calls `screen.end()` which commits the frame buffer.
+
+### Every render.end() needs a matching render.begin()
+
+Multiple begin/end pairs work correctly. Call `render.begin()` → draw calls → `render.end()` for each frame.
+
+### drawText with Fonts
+
+Text rendering works correctly with the Gothic font family via `render.drawText(text, font, color, x, y)`. The `render.getTextWidth(text, font)` metric works for centering calculations.
+
+## AppMessage / Message Constructor
+
+`new Message(...)` opens the Pebble AppMessage system via `app_message_open()`. On the emulator without a connected phone, this can crash the app silently. The `try/catch` in JS cannot catch native-level crashes. For emulator testing, defer or skip `messages.init()` until a phone connection is available.
+
+### Build System Notes
+
+1. **wscript:** The generated wscript includes `pbl_bundle` with `js=` and `js_entry_file=` parameters referencing PKJS files. These must be KEPT even though we don't use PKJS — removing them causes the Moddable build preprocess to fail.
+2. **manifest.json** references `manifest_mod.json` and `manifest_typings.json` only. Each module file MUST be listed in the `modules` array. The string form `"*": "./main"` only works for apps importing only built-in modules (no relative imports).
 
 ## Testing Strategy Notes
 

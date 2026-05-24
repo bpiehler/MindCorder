@@ -1,5 +1,7 @@
+console.log("JS: main.js evaluation started");
+
 import Poco from "commodetto/Poco";
-import Vibes from "pebble/vibes";
+// import Vibes from "pebble/vibes";
 import Button from "pebble/button";
 import * as state from "./state";
 import * as dictation from "./dictation";
@@ -18,6 +20,38 @@ let noteIds = [];
 
 const SCREEN_SIZE = 260;
 const PADDING = 20;
+const ROUND_MASK = 32;
+const VISIBLE_W = SCREEN_SIZE - 2 * ROUND_MASK;
+const DEBUG_BAR_X = ROUND_MASK;
+const DEBUG_BAR_Y = 115;
+const DEBUG_BAR_H = 20;
+const DEBUG_SEG_W = VISIBLE_W / 8;
+
+let debugStep = 0;
+
+function debugBar(color) {
+    debugStep++;
+    const x = DEBUG_BAR_X + (debugStep - 1) * DEBUG_SEG_W;
+    try {
+        render.begin();
+        render.fillRectangle(color, x, DEBUG_BAR_Y, DEBUG_SEG_W, DEBUG_BAR_H);
+        render.end();
+    } catch (e) {}
+}
+
+function debugFail(msg) {
+    if (render) {
+        try {
+            render.begin();
+            const errRed = render.makeColor(255, 0, 0);
+            const errWhite = render.makeColor(255, 255, 255);
+            render.fillRectangle(errRed, 0, 0, render.width, render.height);
+            render.end();
+            const errFont = new render.Font("Gothic-Bold", 24);
+            drawCenteredText("ERR: " + msg, errFont, errWhite, SCREEN_SIZE / 2 - 20);
+        } catch (e2) {}
+    }
+}
 
 function initColors() {
     black = render.makeColor(0, 0, 0);
@@ -28,7 +62,7 @@ function initColors() {
 }
 
 function initFonts() {
-    fontLarge = new render.Font("Leco-Regular", 42);
+    fontLarge = new render.Font("Gothic-Bold", 28);
     fontMedium = new render.Font("Gothic-Regular", 24);
     fontSmall = new render.Font("Gothic-Regular", 18);
     fontBold = new render.Font("Gothic-Bold", 18);
@@ -53,8 +87,10 @@ function drawCenteredText(text, font, color, y) {
 }
 
 function drawConnectionDot(connected) {
+    const x = SCREEN_SIZE / 2 - 6;
+    const y = ROUND_MASK + 4;
     render.begin();
-    render.fillRectangle(connected ? green : gray, PADDING, PADDING, 12, 12);
+    render.fillRectangle(connected ? green : gray, x, y, 12, 12);
     render.end();
 }
 
@@ -65,6 +101,7 @@ function showIdleScreen() {
     drawConnectionDot(messages.isConnected());
 }
 
+
 function showListeningScreen() {
     clearScreen();
     render.begin();
@@ -73,8 +110,8 @@ function showListeningScreen() {
     drawCenteredText("Listening...", fontMedium, black, 150);
     
     let visible = true;
-    if (animationTimer) Timer.clear(animationTimer);
-    animationTimer = Timer.repeat(() => {
+    if (animationTimer) clearInterval(animationTimer);
+    animationTimer = setInterval(() => {
         visible = !visible;
         render.begin();
         if (visible) {
@@ -145,7 +182,7 @@ function showErrorScreen(message) {
 
 function handleStateChange(newState, data) {
     if (animationTimer) {
-        Timer.clear(animationTimer);
+        clearInterval(animationTimer);
         animationTimer = null;
     }
     
@@ -255,7 +292,7 @@ function handleIncomingMessage(msgMap) {
         case 12:
             const completeResult = chunk.receiveCompleteWithSession(incomingSessionId);
             if (completeResult.success) {
-                Vibes.doublePulse();
+                // Vibes.doublePulse(); -- bridge not yet implemented
                 currentBody = completeResult.text;
                 if (currentNoteId) {
                     storage.saveNoteTitle(currentNoteId, currentTitle || "Untitled", Date.now());
@@ -271,7 +308,7 @@ function handleIncomingMessage(msgMap) {
             chunk.receiveReset();
             break;
         case 14:
-            Vibes.doublePulse();
+            // Vibes.doublePulse(); -- bridge not yet implemented
             currentTitle = title;
             currentBody = body;
             if (currentNoteId) {
@@ -326,26 +363,45 @@ function handleButtonPress(type) {
     }
 }
 
-function main() {
+console.log("JS: starting top-level init");
+let initOk = false;
+
+try {
+    console.log("JS: screen global check: typeof=" + typeof screen + ", exists=" + (screen != null));
+    console.log("JS: Instantiating Poco");
     render = new Poco(screen);
+    console.log("JS: Poco created: " + render.width + "x" + render.height);
+    debugBar(render.makeColor(0, 0, 255));
+    
+    console.log("JS: Initializing colors");
     initColors();
+    console.log("JS: Colors initialized: black=" + JSON.stringify(black) + " white=" + JSON.stringify(white));
+    debugBar(render.makeColor(0, 200, 0));
+    
+    console.log("JS: Initializing fonts");
     initFonts();
+    console.log("JS: Fonts initialized: large=" + (fontLarge ? fontLarge.name + " " + fontLarge.height : "null"));
+    debugBar(render.makeColor(200, 200, 0));
     
+    console.log("JS: Initializing storage");
     noteIds = storage.init();
+    console.log("JS: Storage initialized, noteIds count=" + noteIds.length);
+    debugBar(render.makeColor(0, 200, 200));
     
+    console.log("JS: Initializing dictation");
     dictation.init(handleDictationSuccess, handleDictationError);
-    messages.init(handleIncomingMessage, () => {
-        console.log("Connected to phone");
-    }, () => {
-        console.log("Disconnected from phone");
-    });
+    console.log("JS: Dictation initialized");
+    debugBar(render.makeColor(200, 0, 200));
     
+    console.log("JS: Setting up state callback");
     state.onStateChange(handleStateChange);
+    console.log("JS: State callback set up");
     
     chunk.setOnTimeoutCallback((err) => {
         state.transition(state.ERROR, { errorMessage: "Transfer timeout" });
     });
     
+    console.log("JS: Setting up buttons");
     new Button({
         types: ["select", "up", "down", "back"],
         onPush(down, type) {
@@ -353,8 +409,18 @@ function main() {
             handleButtonPress(type);
         }
     });
+    console.log("JS: Buttons set up");
+    debugBar(render.makeColor(100, 100, 255));
+    debugBar(render.makeColor(255, 255, 255));
     
-    state.transition(state.IDLE);
+    initOk = true;
+    console.log("JS: init complete, debug bars visible for 2s");
+    
+    setTimeout(function() {
+        console.log("JS: Showing idle screen");
+        state.transition(state.IDLE);
+    }, 2000);
+} catch (e) {
+    console.log("JS EXCEPTION during init: " + e.message + "\nStack:\n" + e.stack);
+    debugFail(e.message);
 }
-
-main();

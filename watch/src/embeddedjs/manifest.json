@@ -1,16 +1,23 @@
 {
- 	"include":  [
-		"$(MODDABLE)/examples/manifest_mod.json",
-		"$(MODDABLE)/examples/manifest_typings.json"
-	],
-	"modules": {
-		"*": [
-			"./main",
-			"./state",
-			"./dictation",
-			"./messages",
-			"./storage",
-			"./chunk"
-		]
-	}
+    "include": [
+        "$(MODDABLE)/examples/manifest_mod.json",
+        "$(MODDABLE)/examples/manifest_typings.json"
+    ],
+    "creation": {
+        "static": 65536,
+        "chunk": {
+            "initial": 16384
+        },
+        "stack": 4096
+    },
+    "modules": {
+        "*": [
+            "./main",
+            "./state",
+            "./dictation",
+            "./messages",
+            "./storage",
+            "./chunk"
+        ]
+    }
 }

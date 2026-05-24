@@ -1,34 +1,28 @@
-import device from "device"
+import files from "embedded:storage/files"
 
-const NOTES_DIR = "/notes/"
+const NOTES_DIR = "notes/"
 const INDEX_FILE = NOTES_DIR + "index.json"
 
 function ensureDir() {
     try {
-        device.files.openFile({ path: NOTES_DIR + ".keep", mode: "r+" })
+        files.openFile({ path: NOTES_DIR + ".keep", mode: "w+", size: 0 }).close()
     } catch (e) {
-        try {
-            const f = device.files.openFile({ path: NOTES_DIR + ".keep", mode: "w+", size: 0 })
-            f.close()
-        } catch (e2) {
-            // Directory may already exist
-        }
     }
 }
 
 function writeJson(path, obj) {
     const data = ArrayBuffer.fromString(JSON.stringify(obj))
     try {
-        device.files.delete(path)
+        files.delete(path)
     } catch (e) {}
-    const f = device.files.openFile({ path, mode: "w+", size: data.byteLength })
+    const f = files.openFile({ path, mode: "w+", size: data.byteLength })
     f.write(data, 0)
     f.close()
 }
 
 function readJson(path) {
     try {
-        const f = device.files.openFile({ path })
+        const f = files.openFile({ path })
         const size = f.status().size
         const buf = f.read(size, 0)
         f.close()
@@ -40,7 +34,7 @@ function readJson(path) {
 
 function readText(path) {
     try {
-        const f = device.files.openFile({ path })
+        const f = files.openFile({ path })
         const size = f.status().size
         const buf = f.read(size, 0)
         f.close()
@@ -52,7 +46,7 @@ function readText(path) {
 
 function deleteFile(path) {
     try {
-        device.files.delete(path)
+        files.delete(path)
     } catch (e) {}
 }
 
@@ -84,9 +78,9 @@ export function saveNoteTitle(id, title, timestamp) {
 export function cacheNoteBody(id, bodyText) {
     const data = ArrayBuffer.fromString(bodyText)
     try {
-        device.files.delete(NOTES_DIR + id + ".body.txt")
+        files.delete(NOTES_DIR + id + ".body.txt")
     } catch (e) {}
-    const f = device.files.openFile({ path: NOTES_DIR + id + ".body.txt", mode: "w+", size: data.byteLength })
+    const f = files.openFile({ path: NOTES_DIR + id + ".body.txt", mode: "w+", size: data.byteLength })
     f.write(data, 0)
     f.close()
 }

@@ -107,9 +107,10 @@ v
 ### Component Breakdown
 
 #### A. Watch Layer (Alloy SDK / JavaScript)
-* **Dictation API**: Alloy's built-in dictation module (wraps Pebble OS dictation). Requires user confirmation on-screen (via physical Select button) per native Alloy SDK constraints. Practical session timeout is ~30-60 seconds.
+* **Dictation API**: Native C bridge (`src/c/dictation.c`) wrapping Pebble OS dictation (`dictation_session` C API), exposed to JS via an XS native module. The JS wrapper (`src/embeddedjs/dictation.js`) provides the same class-based API: `new Dictation({onReadable, onError})` with `.start()` and `.read()`. Requires user confirmation on-screen (via physical Select button) per native Pebble dictation constraints. Practical session timeout is ~30-60 seconds.
+* **Vibes API**: Native C bridge (`src/c/vibes.c`) wrapping Pebble OS vibration (`vibes_double_pulse`, etc.), exposed to JS as a static class: `Vibes.doublePulse()`, `.shortPulse()`, `.longPulse()`.
 * **AppMessage (no PKJS)**: Alloy's `Message` class handles watch-phone communication. Watch `package.json` includes `companionApp.android` section so Pebble routes messages directly to the companion app. **No `src/pkjs/index.js` is present.**
-* **Title-Only Storage**: The watch stores note metadata (ID, title, timestamp, pin/archive flags) as JSON files via Alloy's `device.files` API. Full note content lives on the phone. When a user selects a note title on the watch, the watch sends the note ID to the phone, which responds with the full pre-formatted plain text body. The most-recently-viewed note body is cached locally for offline access.
+* **Title-Only Storage**: The watch stores note metadata (ID, title, timestamp, pin/archive flags) as JSON files via Pebble's `embedded:storage/files` module (the `"device"` alias is not available on Pebble; use the underlying module path directly). Full note content lives on the phone. When a user selects a note title on the watch, the watch sends the note ID to the phone, which responds with the full pre-formatted plain text body. The most-recently-viewed note body is cached locally for offline access.
 * **Poco Canvas UI**: Procedural canvas-based UI using `commodetto/Poco`. Handles circular layout manually with custom calculations for 260×260 round displays (Gabbro). Supports touchscreen input on Emery and Gabbro.
 * **Markdown**: The watch does NOT parse Markdown. The phone strips Markdown to plain text before sending. The watch receives pre-formatted text with explicit line breaks and bullet characters.
 
@@ -145,7 +146,8 @@ v
 | **No Native Background Local LLM on Old Phones**<br>Older Android devices don't have AICore or Gemini Nano hardware enablement. | The companion app checks for system hardware features during first run. If local models are absent, the app routes to cloud providers (Phase 2 functionality). |
 | **Watch Storage Constraints**<br>While Alloy's file system removes the 256-byte C SDK persist limit, watch storage is still finite. | Store only titles + metadata on watch. Full content lives on phone. Cache only the most-recently-viewed note body; evict older cached bodies. |
 | **Bluetooth Message Duplication**<br>AppMessage can deliver the same message twice due to ACK/NACK ambiguity. | Monotonic `MSG_ID` counter on every message. Both watch and phone track last processed ID and silently drop duplicates. |
-| **Alloy Dictation API Uncertainty**<br>Alloy's dictation API may not support all C SDK features (e.g., disabling confirmation dialog). | Verify API before Phase 1 implementation. Fallback to C SDK dictation via `mdbl.c` entry point if needed. |
+| **Dictation & Vibes Not in Moddable Pebble Platform**<br>The Pebble Moddable platform does not include JS wrappers for dictation or vibes. The standard `import ... from "pebble/dictation"` pattern fails with "import default not found." | Implement native C bridges (`src/c/dictation.c`, `src/c/vibes.c`) following the pattern of the existing `pebble/button` module in the SDK. C code wraps Pebble OS APIs; JS wrappers provide the standard class-based API surface. |
+| **File I/O Module Path**<br>The `"device"` module alias (common in standard Moddable projects) is not available on Pebble. The `import device from "device"` pattern fails. | Import directly from the underlying module: `import files from "embedded:storage/files"` for file I/O. Use `embedded:storage/key-value` for key-value storage if needed. |
 
 
 ## 5. Message Protocol

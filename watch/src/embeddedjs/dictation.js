@@ -1,24 +1,16 @@
-import Dictation from "pebble/dictation"
+// Dictation bridge not yet implemented — importing from pebble/dictation
+// would fail. Once src/c/dictation.c is written, replace with:
+//   import Dictation from "./dictation"
+// For now, init()/start() are no-ops so the app can load.
 
-let dictation = null
 let callbacks = {}
 
 export function init(onReadable, onError) {
-    dictation = new Dictation({
-        onReadable() {
-            const text = this.read()
-            if (onReadable) onReadable(text)
-        },
-        onError(e) {
-            if (onError) onError(e)
-        }
-    })
+    callbacks = { onReadable, onError }
 }
 
 export function start() {
-    if (dictation) {
-        dictation.start()
-    }
+    // TODO: stub — will call dictation.start() once bridge is built
 }
 
 export function getErrorType(errorValue) {

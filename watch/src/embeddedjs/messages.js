@@ -8,22 +8,26 @@ let connected = false
 let callbacks = {}
 
 export function init(onMessage, onConnect, onDisconnect) {
-    message = new Message({
-        keys: ["MSG_ID", "COMMAND", "RAW_TEXT", "NOTE_ID", "SUMMARY_CHUNK", "CHUNK_INDEX", "CHUNK_TOTAL", "CHUNK_RESET", "TITLE", "BODY", "COMPLETE", "FETCH_NOTE", "SESSION_ID"],
-        onReadable() {
-            const msgs = this.read()
-            if (onMessage) onMessage(msgs)
-        },
-        onWritable() {
-            connected = true
-            if (onConnect) onConnect()
-            sendHandshake()
-        },
-        onSuspend() {
-            connected = false
-            if (onDisconnect) onDisconnect()
-        }
-    })
+    try {
+        message = new Message({
+            keys: ["MSG_ID", "COMMAND", "RAW_TEXT", "NOTE_ID", "SUMMARY_CHUNK", "CHUNK_INDEX", "CHUNK_TOTAL", "CHUNK_RESET", "TITLE", "BODY", "COMPLETE", "FETCH_NOTE", "SESSION_ID"],
+            onReadable() {
+                const msgs = this.read()
+                if (onMessage) onMessage(msgs)
+            },
+            onWritable() {
+                connected = true
+                if (onConnect) onConnect()
+                sendHandshake()
+            },
+            onSuspend() {
+                connected = false
+                if (onDisconnect) onDisconnect()
+            }
+        })
+    } catch (e) {
+        message = null
+    }
 }
 
 export function sendHandshake() {

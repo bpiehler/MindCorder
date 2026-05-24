@@ -8,9 +8,8 @@
   "pebble": {
     "displayName": "MindCorder",
     "uuid": "E2ECDBEB-2D2B-412F-AD1D-9059180EBC47",
-    "projectType": "moddable",
+    "projectType": "native",
     "sdkVersion": "3",
-    "enableMultiJS": true,
     "targetPlatforms": [
       "emery",
       "gabbro"

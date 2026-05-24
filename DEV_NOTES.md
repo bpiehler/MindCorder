@@ -1,55 +1,183 @@
 # Development Notes — MindCorder
 
-## Alloy SDK API Discoveries
+## ⚠️ Architecture Decision: Moddable/Alloy → Pure C (May 2026)
 
-### Dictation API (CONFIRMED)
+**Problem:** The app initially used Moddable/Alloy (JavaScript on XS engine) for the watch UI. However, the Pebble SDK's build pipeline (`mcrun -f x`) **rejects native C code** in mods. The `"ffi"` manifest section for bridging C→JS is explicitly blocked by mcrun.js line 422-427:
 
-Source: [hellodictation example](https://github.com/Moddable-OpenSource/pebble-examples/tree/main/hellodictation)
+```javascript
+if (this.cFiles?.length) {
+    throw new Error("mod cannot contain native code")
+}
+```
 
-```js
-import Dictation from "pebble/dictation"
+This meant two critical Pebble features — dictation and vibes — were inaccessible from JS without patching the build toolchain. The FFI workaround (C glue + linker tricks + polling pattern) required modifying mcrun.js to generate `.xsi` FFI metadata, which the bundled Moddable SDK predates.
 
-let dt = new Dictation({
-    onReadable() {
-        // this.read() returns the transcribed text string
-        console.log(`Transcription: ${this.read()}`);
-    },
-    onError(e) {
-        // e is the error value (unknown type/codes — need to discover)
-        console.log(`Dictation error: ${e}`);
+**Resolution:** Rewrite the watch app in **pure C** using the Pebble C SDK. Dictation and vibes are native C SDK calls (no bridge needed). The Pebble C UI framework (Window, TextLayer, MenuLayer, ScrollLayer) is more appropriate than the Poco canvas API for this app's list-and-text UI. The standard `pebble build` toolchain compiles C apps without any FFI or Moddable involvement.
+
+**Impact:**
+- The watch app is ~600–700 lines of C (vs ~1100 lines of JS + C workarounds)
+- All Pebble SDK features are available natively
+- No build-tool patching, no linker tricks, no FFI
+- The companion app (Flutter, Phase 2+) is unaffected
+
+**What was removed:**
+- `watch/src/embeddedjs/` (entire JS source tree)
+- `watch/test/` (entire JS test tree)
+- `watch/node_modules/` (JS dependencies)
+- `watch/src/c/mdbl.c` (XS bootstrap entry point — replaced with standard `pbl_main`)
+- `watch/src/c/vibes.c` / `dictation.c` (FFI wrappers — replaced by direct C SDK calls in app code)
+- `manifest.json` (no longer needed; `package.json` handles config)
+- Linker retention table (`ffi_refs[]`) and `__asm__` hack
+
+---
+
+## Build System (Pure C SDK) — May 2026
+
+**Build tool:** Standard `pebble build` (no Moddable/mcrun involvement)
+
+**Project type:** `package.json` must set `"projectType": "native"` (not `"moddable"`)
+
+**wscript changes:**
+- Remove `js=` and `js_entry_file=` parameters from `ctx.pbl_bundle()`
+- C sources are auto-discovered via `ctx.path.ant_glob('src/c/**/*.c')`
+- All `.c` files in `src/c/` are compiled and linked into `pebble-app.elf`
+
+**Known gotchas encountered:**
+
+1. **ClickHandler signature:** Pebble SDK's `ClickHandler` is `void (*)(void *context, void *data)` — TWO params, not one. All click handlers must take `(void *context, void *data)`.
+
+2. **Persist API:** `persist_read` / `persist_write` don't exist. Use `persist_read_data` / `persist_write_data` for binary data.
+
+3. **Window root layer cleanup:** Do NOT destroy `window_get_root_layer(window)` in unload handlers. Track individual layers (TextLayer, MenuLayer) and destroy them specifically.
+
+4. **Cross-module globals:** Shared state between `.c` files needs careful declaration:
+   - Define in ONE `.c` file (without `static`)
+   - Declare `extern` in `protocol.h`
+   - All files that need access include `protocol.h`
+
+5. **s_window lifecycle:** A single shared `Window *s_window` across `main.c` and `ui.c` works. Each `window_*_push()` function destroys the old window (via `window_destroy(s_window)`) before creating and pushing a new one. `set_state()` no longer calls `window_stack_remove` — the push functions handle removal via `window_destroy`.
+
+6. **MenuLayer click takeover:** `menu_layer_set_click_config_onto_window()` replaces the window's click config provider. So window-level `click_config_provider` is NOT called for MenuLayer windows. The MenuLayer handles its own up/down/select navigation internally.
+
+7. **State-machine init sentinel:** If your first `set_state()` call transitions to a state equal to the initial value of `s_state`, the early-return guard will silently skip it and no window will be pushed → `app_event_loop()` exits immediately. Initialize `s_state` to an out-of-range sentinel like `(AppState)0xFF` so the first call always passes the guard.
+
+**Build results:**
+- Platforms: emery (Pebble Time 2), gabbro (Pebble Round 2)
+- RAM footprint: ~21KB
+- Free RAM: ~110KB
+- Build time: <0.5s
+
+---
+
+## Alloy SDK API Discoveries (Historical — Superseded by Pure C)
+
+### Dictation API — FFI Bridge Pattern (SDK 4.9.169)
+
+**`pebble/dictation` is NOT available as a built-in module in SDK 4.9.169.** The C SDK functions exist in `libpebble.a` but no JS wrapper is shipped. Use FFI instead (see helloffi example).
+
+**C SDK API surface (from `pebble.h`):**
+
+```c
+typedef enum {
+    DictationSessionStatusSuccess = 0,
+    DictationSessionStatusFailureTranscriptionRejected = 1,
+    DictationSessionStatusFailureSystemAborted = 2,
+    DictationSessionStatusFailureNoSpeechDetected = 3,
+    DictationSessionStatusFailureConnectivityError = 4,
+    DictationSessionStatusFailureInternalError = 5,
+    DictationSessionStatusFailureRecognizerError = 6,
+} DictationSessionStatus;
+
+typedef void (*DictationSessionStatusCallback)(
+    DictationSession *session,
+    DictationSessionStatus status,
+    char *transcription,
+    void *context
+);
+
+DictationSession* dictation_session_create(
+    uint32_t buffer_size,
+    DictationSessionStatusCallback callback,
+    void *callback_context,
+    void *buffer
+);
+DictationSessionStatus dictation_session_start(DictationSession *session);
+void dictation_session_stop(DictationSession *session);
+void dictation_session_destroy(DictationSession *session);
+void dictation_session_enable_confirmation(DictationSession *session, bool enable);
+void dictation_session_enable_error_dialogs(DictationSession *session, bool enable);
+```
+
+**FFI approach:** C glue layer stores callback results in globals. JS polls with `Timer.repeat`. See plan.md Section 1.3 for full implementation.
+
+**Status code mapping to our error types:**
+
+| C Status Code | getErrorType() result | User-Facing Message |
+|---|---|---|
+| 0 (Success) | — | (not an error) |
+| 1 (Rejected) | `"rejected"` | "" (silent) |
+| 2 (Aborted) | `"aborted"` | "Try again" |
+| 3 (No Speech) | `"no_speech"` | "No speech detected" |
+| 4 (Connectivity) | `"connectivity"` | "Phone not connected" |
+| 5 (Internal) | `"internal_error"` | "Error, try again" |
+| 6 (Recognizer) | `"internal_error"` | "Error, try again" |
+| Unknown | `"internal_error"` | "Error, try again" |
+
+**Known issues:**
+- ⚠️ **Confirmation dialog**: C SDK defaults to enabled. The user must press Select to confirm each transcription. This adds one extra button press per session. Design UX around this.
+- ⚠️ **Error dialogs**: C SDK defaults to enabled. Can disable via `dictation_session_enable_error_dialogs(session, false)`.
+- ⚠️ **Buffer size**: C SDK default is ~2KB. We'll use `2048` as buffer size.
+- ⚠️ **Session reuse**: Call `dictation_session_destroy()` and recreate each time, or reuse and re-call `start()`.
+
+### Vibration API — FFI Bridge
+
+**`pebble/vibes` is NOT available as a built-in module in SDK 4.9.169.** The C SDK functions exist in `libpebble.a` but no JS wrapper is shipped. Use FFI.
+
+**C SDK API surface:**
+
+```c
+void vibes_short_pulse(void);
+void vibes_long_pulse(void);
+void vibes_double_pulse(void);     // ← use this for summary notification
+void vibes_enqueue_custom_pattern(VibePattern pattern);
+void vibes_cancel(void);
+```
+
+**FFI declarations (in manifest.json):**
+
+```json
+{
+    "ffi": {
+        "sources": ["./vibes.c"],
+        "functions": {
+            "vibes_short_pulse":   { "arguments": [], "returns": "void" },
+            "vibes_long_pulse":    { "arguments": [], "returns": "void" },
+            "vibes_double_pulse":  { "arguments": [], "returns": "void" },
+            "vibes_cancel":        { "arguments": [], "returns": "void" }
+        }
     }
-});
-
-dt.start(); // begins dictation session
+}
 ```
 
-**Key findings:**
-- ✅ `import Dictation from "pebble/dictation"` — native Alloy module, no C SDK fallback needed
-- ✅ `onReadable()` callback fires when transcription is ready
-- ✅ `this.read()` returns the transcribed text string
-- ✅ `onError(e)` callback for error handling
-- ✅ `dt.start()` begins a dictation session
+**C glue (src/c/vibes.c):**
 
-**Unknowns (to investigate during implementation):**
-- ⚠️ **Confirmation dialog**: C SDK has `dictation_session_enable_confirmation()` — Alloy API does NOT expose this in the example. The user likely must press Select to confirm each transcription. This adds one extra button press per session. Design UX around this.
-- ⚠️ **Error dialogs**: C SDK has `dictation_session_enable_error_dialogs()` — unknown if Alloy supports disabling these.
-- ⚠️ **Error codes**: `onError(e)` receives an error value, but the error code names/values are unknown (C SDK uses `DictationSessionStatusFailureNoSpeechDetected`, etc.). Need to discover these during testing.
-- ⚠️ **Buffer size**: C SDK has `dictation_session_create(buffer_size, ...)` — Alloy constructor takes only a config object. Buffer size may be handled internally or unlimited by default.
-- ⚠️ **Session reuse**: In the example, `setImmediate(() => this.start())` auto-restarts after each transcription. We'll call `start()` manually from our state machine instead.
+```c
+#include <pebble.h>
 
-### Vibration API (CONFIRMED)
+void vibes_short_pulse(void)  { vibes_short_pulse(); }
+void vibes_long_pulse(void)   { vibes_long_pulse(); }
+void vibes_double_pulse(void) { vibes_double_pulse(); }
+void vibes_cancel(void)       { vibes_cancel(); }
+```
 
-Source: [hellovibes example](https://github.com/Moddable-OpenSource/pebble-examples/tree/main/hellovibes)
+**JS usage:**
 
 ```js
-import Vibes from "pebble/vibes"
-
-Vibes.shortPulse()
-Vibes.longPulse()
-Vibes.doublePulse()  // ← use this for summary notification
-Vibes.pattern([100, 100, 150, 50, 50, 150, 1000])  // [on, off, on, off, ...] in ms
-Vibes.cancel()
+Natives.vibes_double_pulse()
+Natives.vibes_cancel()
 ```
+
+⚠️ **Custom patterns** (`vibes_enqueue_custom_pattern`) are NOT exposed via FFI because `VibePattern` is a struct and FFI only supports primitive types and pointers.
 
 ### Message API (CONFIRMED)
 
@@ -178,52 +306,103 @@ Color functions: `blendColors`, `hsl`, `hsla`, `rgb`, `rgba`
 | Roboto | Bold | 49 |
 | Roboto Condensed | Regular | 21 |
 
-## Native C Module Bridge Pattern
+## FFI (Foreign Function Interface) Pattern — Recommended for App-Level C→JS Calls
 
-The Pebble Moddable platform only includes a subset of Moddable's standard modules. Several commonly-used modules are **missing** from the Pebble build:
+**`Native(...)` class extension is firmware-only.** App-level C code (`src/c/`) cannot use `class extends Native("...")` — it throws `SyntaxError: invalid Native` at runtime because the native function registry is populated only by firmware-level pre-installed modules.
 
-- **`pebble/dictation`** — NOT available as a built-in module
-- **`pebble/vibes`** — NOT available as a built-in module
-- **`"device"`** — NOT available as a standard module alias (use `embedded:storage/files` directly for file I/O, `embedded:storage/key-value` for preferences)
+**The correct approach for app-level code is FFI**, demonstrated by the helloffi example:
 
-**Available** Pebble-native JS modules (built-in, no bridge needed):
+### FFI Manifest Declaration
 
-- `pebble/button` — Button input (see `build/devices/pebble/modules/button/`)
-- `pebble/message` — AppMessage communication (see `build/devices/pebble/modules/message/`)
+In `src/embeddedjs/manifest.json`, add an `"ffi"` section:
+
+```json
+{
+  "ffi": {
+    "sources": ["./dictation.c", "./vibes.c"],
+    "functions": {
+      "vibes_double_pulse": {
+        "arguments": [],
+        "returns": "void"
+      },
+      "dictation_start": {
+        "arguments": ["uint32_t"],
+        "returns": "int32_t"
+      },
+      "dictation_get_status": {
+        "arguments": [],
+        "returns": "int32_t"
+      }
+    }
+  }
+}
+```
+
+The `"sources"` paths are relative to the manifest (inside `src/embeddedjs/`), but the build system finds C files in `src/c/` by matching the basename.
+
+### FFI C Code Pattern
+
+Write regular C functions — no XS headers needed:
+
+```c
+// src/c/vibes.c
+#include <pebble.h>
+
+void vibes_double_pulse(void) {
+    vibes_double_pulse();
+}
+```
+
+### FFI JS Call Pattern
+
+```js
+Natives.vibes_double_pulse()
+Natives.dictation_get_status()
+```
+
+### FFI Limitations
+
+- **No C function pointer callbacks** — FFI cannot create JS closures from C function pointers. For callback-heavy APIs (dictation), use a C glue layer that stores results in globals and have JS poll via `Timer.repeat`.
+- **Direct function calls only** — No object-oriented wrappers, no constructor patterns.
+
+### Available Pebble SDK Built-in Modules (no C bridge needed)
+
+These are pre-installed in `build/devices/pebble/modules/` with both C and JS source:
+
+- `pebble/button` — Button input
+- `pebble/message` — AppMessage communication
+- `pebble/global` — watch.connected, watch.hour12, event listeners
 - `commodetto/Poco` — Low-level canvas rendering
+- `commodetto/PocoBlit` — Pixel blit operations
+- `pebble/display` — Display driver
+- `pebble/accelerometer` — Accelerometer sensor
+- `pebble/compass` — Compass sensor
+- `pebble/battery` — Battery level
+- `pebble/location` — GPS location (from phone)
+- `pebble/touch` — Touch input
+- `pebble/httpclient` — HTTP requests (via phone proxy)
+- `pebble/websocketclient` — WebSocket (via phone proxy)
+- `pebble/archive-resource` — Resource archive extraction
 - `Timer` (global) — setTimeout, Timer.set, Timer.repeat, Timer.delay, etc.
 - `watch` (global) — Connection status, platform info
 
-### Bridge Implementation Pattern
+### NOT available as built-in modules in SDK 4.9.169
 
-Follow the pattern established by the existing `pebble/button` module:
+- **`pebble/dictation`** — C SDK functions exist in `libpebble.a` (`dictation_session_create`, etc.) but NO JS wrapper module is shipped
+- **`pebble/vibes`** — Same: C SDK functions exist (`vibes_double_pulse`, etc.) but NO JS wrapper module
+- **`"device"`** — Not available as a standard module alias (use `embedded:storage/files` directly for file I/O, `embedded:storage/key-value` for preferences)
 
-```
-src/c/dictation.c           # C code compiled into the watch binary
-src/embeddedjs/dictation.js  # JS wrapper imported by application code
-```
+### Module Resolution Order (Build System)
 
-The C file registers XS native functions that wrap the Pebble C SDK API. The JS file imports the native module and wraps it in a class with the expected API surface.
+1. Project's own manifest modules (`src/embeddedjs/manifest.json`)
+2. Included manifests (`manifest_mod.json`, `manifest_typings.json`)
+3. Device-specific modules (`build/devices/pebble/modules/*/manifest.json`)
+4. Global Moddable modules (`modules/`)
+5. `node_modules/` (if present and configured)
 
-**Reference implementation:** `build/devices/pebble/modules/button/pebblebutton.c` + `pebblebutton.js` in the SDK.
+### Hellodictation/Hellovibes Examples
 
-**Key XS native function signature (C side):**
-```c
-void xs_pebbledictation(xsMachine *the) {
-    // Access JS args with xs* functions
-    // Call Pebble C SDK APIs
-    // Return values or call JS callbacks
-}
-```
-
-**Key JS wrapper pattern (JS side):**
-```js
-class Dictation extends Native("xs_pebbledictation_destructor") {
-    constructor(options) { super(); native("xs_pebbledictation").call(this, options); }
-    start() { native("xs_pebbledictation_start").call(this); }
-}
-export default Dictation;
-```
+The official examples at `github.com/Moddable-OpenSource/pebble-examples` import `pebble/dictation` and `pebble/vibes` as if they're built-in modules, but these modules are NOT present in SDK 4.9.169. The examples may require a newer SDK version or the modules may be compiled into the firmware binary itself. For SDK 4.9.169, FFI is the working approach.
 
 ### JS console.log Not Visible in pebble logs
 

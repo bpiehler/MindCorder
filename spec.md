@@ -3,14 +3,14 @@
 
 **Project Title:** MindCorder (Zero-Friction Thought Capture & AI Summary App)  
 **Target Platform:** Pebble Time 2 (Emery) / Pebble Round 2 (Gabbro) & Android Companion App  
-**Document Version:** 3.0 (Alloy SDK, PebbleKit Android 2, Titles-on-Watch, Android-Only)
+**Document Version:** 4.0 (Pure C Watch App, PebbleKit Android 2, Titles-on-Watch, Android-Only)
 
 
 ## 1. Executive Summary & Core Value Proposition
 
 MindCorder is an ambient, zero-friction audio memo capture tool designed specifically for the unique physical advantages of the new Pebble watches (Time 2 and Round 2). Unlike modern smartwatches that suffer from "battery anxiety," the Pebble's 2-week battery life and high-density, low-power e-paper screen allow users to offload unstructured audio logging and ambient thoughts directly from the wrist without constant screen wake or charging management.
 
-The software utilizes a dual-device pipeline: low-overhead voice capture on-wrist via the Pebble Dictation API (Alloy SDK / JavaScript), paired with robust, local-first machine learning synthesis on an Android smartphone. The watch acts as an input/output terminal — storing only note titles and metadata — while the phone serves as the central engine for AI processing, full-text storage, and detailed reading.
+The software utilizes a dual-device pipeline: low-overhead voice capture on-wrist via the Pebble Dictation API (C SDK), paired with robust, local-first machine learning synthesis on an Android smartphone. The watch acts as an input/output terminal — storing only note titles and metadata — while the phone serves as the central engine for AI processing, full-text storage, and detailed reading.
 
 **iOS support is deferred to a post-MVP track.** Phase 1-3 targets Android only.
 
@@ -53,14 +53,14 @@ The architecture enforces strict separation of concerns: the watch functions as 
 |                     PEBBLE TIME 2 / ROUND 2 (Wrist App)                           |
 |                                                                                   |
 |  +---------------------+      +---------------------+      +-------------------+  |
-|  |   Dictation API     | ---> |   AppMessage API    | ---> |  Poco Canvas UI   |  |
-|  |  (Alloy / JS)       |      |  (no PKJS)          |      |  (260x260 Circular)| |
+|  |   Dictation API     | ---> |   AppMessage API    | ---> |  Pebble C UI      |  |
+|  |  (C SDK)            |      |  (C SDK, no PKJS)   |      |  Window/Layer/Menu|  |
 |  +---------------------+      +---------------------+      +-------------------+  |
 |         |                                                              |          |
 |         v                                                              v          |
 |  +---------------------+                                      +----------------+  |
-|  |  File Storage       |                                      |  Title Cache   |  |
-|  |  (note metadata)    |                                      |  (offline nav) |  |
+|  |  Storage API        |                                      |  Title Cache   |  |
+|  |  (C SDK, binary)    |                                      |  (offline nav) |  |
 |  +---------------------+                                      +----------------+  |
 +------------------------------------------|----------------------------------------+
 | Bluetooth (AppMessage → PebbleKit Android 2 → MethodChannel)
@@ -106,12 +106,12 @@ v
 
 ### Component Breakdown
 
-#### A. Watch Layer (Alloy SDK / JavaScript)
-* **Dictation API**: Native C bridge (`src/c/dictation.c`) wrapping Pebble OS dictation (`dictation_session` C API), exposed to JS via an XS native module. The JS wrapper (`src/embeddedjs/dictation.js`) provides the same class-based API: `new Dictation({onReadable, onError})` with `.start()` and `.read()`. Requires user confirmation on-screen (via physical Select button) per native Pebble dictation constraints. Practical session timeout is ~30-60 seconds.
-* **Vibes API**: Native C bridge (`src/c/vibes.c`) wrapping Pebble OS vibration (`vibes_double_pulse`, etc.), exposed to JS as a static class: `Vibes.doublePulse()`, `.shortPulse()`, `.longPulse()`.
-* **AppMessage (no PKJS)**: Alloy's `Message` class handles watch-phone communication. Watch `package.json` includes `companionApp.android` section so Pebble routes messages directly to the companion app. **No `src/pkjs/index.js` is present.**
-* **Title-Only Storage**: The watch stores note metadata (ID, title, timestamp, pin/archive flags) as JSON files via Pebble's `embedded:storage/files` module (the `"device"` alias is not available on Pebble; use the underlying module path directly). Full note content lives on the phone. When a user selects a note title on the watch, the watch sends the note ID to the phone, which responds with the full pre-formatted plain text body. The most-recently-viewed note body is cached locally for offline access.
-* **Poco Canvas UI**: Procedural canvas-based UI using `commodetto/Poco`. Handles circular layout manually with custom calculations for 260×260 round displays (Gabbro). Supports touchscreen input on Emery and Gabbro.
+#### A. Watch Layer (C SDK)
+* **Dictation API**: Direct C SDK call (`dictation_session_create`, `dictation_session_start`). No bridge layer needed. The C callback receives transcribed text directly into a buffer. Confirmation dialog disabled for single-press flow. Error dialogs disabled — handled in app UI. Practical session timeout is ~30-60 seconds.
+* **Vibes API**: Direct C SDK call (`vibes_double_pulse()`). No wrapper needed.
+* **AppMessage (no PKJS)**: Pebble C SDK `app_message_outbox_send()` / `app_message_inbox_received()` for watch↔phone communication. Watch `package.json` includes `companionApp.android` section so Pebble routes messages directly to the companion app. **No `src/pkjs/index.js` is present.**
+* **Title-Only Storage**: The watch stores note metadata (ID, title, timestamp, pin/archive flags) as binary blobs via the Pebble C SDK `Storage` API (`storage_write` / `storage_read`). Full note content lives on the phone. When a user selects a note title on the watch, the watch sends the note ID to the phone, which responds with the full pre-formatted plain text body. The most-recently-viewed note body is cached locally for offline access.
+* **Pebble C UI**: Standard Pebble native UI framework: `Window`, `TextLayer`, `MenuLayer`, `ScrollLayer`. `MenuLayer` provides the note list with title/subtitle per row. `ScrollLayer` + `TextLayer` provides scrollable note body viewing. The C UI framework handles round display clipping automatically. Touchscreen input is supported on Emery and Gabbro.
 * **Markdown**: The watch does NOT parse Markdown. The phone strips Markdown to plain text before sending. The watch receives pre-formatted text with explicit line breaks and bullet characters.
 
 #### B. Mobile Orchestration Layer (Flutter — Android)
@@ -140,14 +140,14 @@ v
 | :--- | :--- |
 | **Dictation Timeout Window**<br>The Pebble Dictation engine cuts off automatically after several seconds of silence and sends audio to Pebble's servers for transcription. Practical limit is ~30–60 seconds per session. | The mobile app processes each chunk immediately when the session terminates. Users can immediately trigger an "append session" via a single button tap to continue dictation. |
 | **AppMessage Payload Limits**<br>Bluetooth buffers have explicit limits. While Emery/Gabbro support larger buffers, the watch's JS heap is highly constrained. Maximum chunk size is limited to 2KB (2048 bytes) to prevent watch-side heap fragmentation and OOM crashes. | Large text sent from phone to watch is split into numbered chunks of max 2KB by the companion app. The watch reassembles segments as raw bytes (using an ArrayBuffer) before converting to string. Timeout of 10 seconds between chunks prevents hung transfers. `CHUNK_RESET` command aborts failed transfers. |
-| **Alloy SDK Limited to Emery/Gabbro**<br>Alloy (JavaScript SDK) only supports Pebble Time 2 and Round 2. Older Pebbles (Classic, Time, Time Round) cannot run Alloy apps. | Target only Emery and Gabbro. Development and testing uses emulators (`pebble install --emulator emery` / `--emulator gabbro`) until physical devices are available. |
+| **C SDK Targets Emery/Gabbro**<br>The watch app targets Pebble Time 2 (Emery) and Round 2 (Gabbro). The C SDK itself supports the full Pebble family, but these are our target platforms. | Target only Emery and Gabbro. Development and testing uses emulators (`pebble install --emulator emery` / `--emulator gabbro`) until physical devices are available. |
 | **PebbleKit JS and PebbleKit Android are mutually exclusive**<br>Per Pebble docs: "PebbleKit JS cannot be used in conjunction with PebbleKit Android or PebbleKit iOS." | Watch app has no `src/pkjs/index.js`. Messages route directly to companion app via PebbleKit Android 2. |
 | **Gemini Nano Android-Only**<br>AICore / Gemini Nano is only available on select Android devices (Pixel 8+, some Samsung). iOS has no equivalent on-device model. | iOS deferred to post-MVP. Android checks for AICore availability at startup; if unavailable, routes to cloud providers. |
 | **No Native Background Local LLM on Old Phones**<br>Older Android devices don't have AICore or Gemini Nano hardware enablement. | The companion app checks for system hardware features during first run. If local models are absent, the app routes to cloud providers (Phase 2 functionality). |
-| **Watch Storage Constraints**<br>While Alloy's file system removes the 256-byte C SDK persist limit, watch storage is still finite. | Store only titles + metadata on watch. Full content lives on phone. Cache only the most-recently-viewed note body; evict older cached bodies. |
+| **Watch Storage Constraints**<br>Watch flash storage is finite. The C SDK `Storage` API supports arbitrary binary blobs (no 256-byte `persist` limit), but total space is limited (~64KB). | Store only titles + metadata on watch. Full content lives on phone. Cache only the most-recently-viewed note body; evict older cached bodies. |
 | **Bluetooth Message Duplication**<br>AppMessage can deliver the same message twice due to ACK/NACK ambiguity. | Monotonic `MSG_ID` counter on every message. Both watch and phone track last processed ID and silently drop duplicates. |
-| **Dictation & Vibes Not in Moddable Pebble Platform**<br>The Pebble Moddable platform does not include JS wrappers for dictation or vibes. The standard `import ... from "pebble/dictation"` pattern fails with "import default not found." | Implement native C bridges (`src/c/dictation.c`, `src/c/vibes.c`) following the pattern of the existing `pebble/button` module in the SDK. C code wraps Pebble OS APIs; JS wrappers provide the standard class-based API surface. |
-| **File I/O Module Path**<br>The `"device"` module alias (common in standard Moddable projects) is not available on Pebble. The `import device from "device"` pattern fails. | Import directly from the underlying module: `import files from "embedded:storage/files"` for file I/O. Use `embedded:storage/key-value` for key-value storage if needed. |
+| **Dictation & Vibes Available Natively in C**<br>Dictation and vibes are available as standard C SDK calls (`dictation_session_create`, `vibes_double_pulse`). No bridge layer needed — pure C apps call these directly. | The C watch app calls Pebble dictation and vibes APIs directly. No JS bridge, no FFI, no build-tool patching required. |
+| **Persist API for Persistence**<br>The Pebble C SDK `Persist` API (`persist_write_data` / `persist_read_data`) supports arbitrary binary blobs with no 256-byte limit. | Store note metadata as binary structs via `persist_write_data()`. Each note gets its own key. Index is a sorted list of note IDs. |
 
 
 ## 5. Message Protocol

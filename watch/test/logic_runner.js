@@ -55,6 +55,16 @@ globalThis.Timer = {
     }
 };
 
+globalThis.setTimeout = function(callback, delay) {
+    const id = nextTimerId++;
+    activeTimers.set(id, { callback, ms: delay, repeat: false });
+    return id;
+};
+
+globalThis.clearTimeout = function(id) {
+    activeTimers.delete(id);
+};
+
 globalThis.screen = {};
 
 // 3. Simple Test Runner Framework

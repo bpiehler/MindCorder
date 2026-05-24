@@ -22,6 +22,7 @@ static uint32_t s_current_note_id = 0;
 char s_error_message[64];
 
 extern void dictation_init(void);
+extern void dictation_deinit(void);
 extern bool dictation_start(void);
 extern void dictation_cancel(void);
 extern bool dictation_is_in_progress(void);
@@ -259,6 +260,7 @@ static void init(void) {
 
 static void deinit(void) {
   dictation_cancel();
+  dictation_deinit();
 }
 
 int main(void) {

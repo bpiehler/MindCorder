@@ -67,6 +67,13 @@ This meant two critical Pebble features — dictation and vibes — were inacces
 - Free RAM: ~110KB
 - Build time: <0.5s
 
+**Known gaps (Phase 1 handoff):**
+- `set_connection_status()` is defined and exported, but no Bluetooth connection callback (`battery_state_service_subscribe` or `connection_service_subscribe`) is registered — the connection indicator never fires.
+- Note list has no delete action — no way to remove notes from the watch.
+- Summary screen uses a fixed-height TextLayer (not ScrollLayer) — long bodies will be clipped rather than scrollable.
+- `dictation_deinit()` is defined in dictation.c but was only recently added to main.c's `deinit()`.
+- No C unit tests exist (requires host-side mocking of Pebble APIs or ARM QEMU).
+
 ---
 
 ## Alloy SDK API Discoveries (Historical — Superseded by Pure C)

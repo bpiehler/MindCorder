@@ -2,7 +2,7 @@
 # Functional Specification & High-Level Architecture
 
 **Project Title:** MindCorder (Zero-Friction Thought Capture & AI Summary App)  
-**Target Platform:** Pebble Time 2 (Emery) / Pebble Round 2 (Gabbro) & Android Companion App  
+**Target Platform:** Pebble Time 2 / Pebble Round 2 / Pebble Time (Emery, Gabbro, Basalt) & Android Companion App  
 **Document Version:** 4.0 (Pure C Watch App, PebbleKit Android 2, Titles-on-Watch, Android-Only)
 
 
@@ -111,7 +111,7 @@ v
 * **Vibes API**: Direct C SDK call (`vibes_double_pulse()`). No wrapper needed.
 * **AppMessage (no PKJS)**: Pebble C SDK `app_message_outbox_send()` / `app_message_inbox_received()` for watch↔phone communication. Watch `package.json` includes `companionApp.android` section so Pebble routes messages directly to the companion app. **No `src/pkjs/index.js` is present.**
 * **Title-Only Storage**: The watch stores note metadata (ID, title, timestamp, pin/archive flags) as binary blobs via the Pebble C SDK `Storage` API (`storage_write` / `storage_read`). Full note content lives on the phone. When a user selects a note title on the watch, the watch sends the note ID to the phone, which responds with the full pre-formatted plain text body. The most-recently-viewed note body is cached locally for offline access.
-* **Pebble C UI**: Standard Pebble native UI framework: `Window`, `TextLayer`, `MenuLayer`, `ScrollLayer`. `MenuLayer` provides the note list with title/subtitle per row. `ScrollLayer` + `TextLayer` provides scrollable note body viewing. The C UI framework handles round display clipping automatically. Touchscreen input is supported on Emery and Gabbro.
+* **Pebble C UI**: Standard Pebble native UI framework: `Window`, `TextLayer`, `MenuLayer`, `ScrollLayer`. `MenuLayer` provides the note list with title/subtitle per row. `ScrollLayer` + `TextLayer` provides scrollable note body viewing. The C UI framework handles round display clipping automatically. Touchscreen input is supported on all color platforms (Basalt, Emery, Gabbro).
 * **Markdown**: The watch does NOT parse Markdown. The phone strips Markdown to plain text before sending. The watch receives pre-formatted text with explicit line breaks and bullet characters.
 
 #### B. Mobile Orchestration Layer (Flutter — Android)
@@ -140,7 +140,7 @@ v
 | :--- | :--- |
 | **Dictation Timeout Window**<br>The Pebble Dictation engine cuts off automatically after several seconds of silence and sends audio to Pebble's servers for transcription. Practical limit is ~30–60 seconds per session. | The mobile app processes each chunk immediately when the session terminates. Users can immediately trigger an "append session" via a single button tap to continue dictation. |
 | **AppMessage Payload Limits**<br>Bluetooth buffers have explicit limits. While Emery/Gabbro support larger buffers, the watch's JS heap is highly constrained. Maximum chunk size is limited to 2KB (2048 bytes) to prevent watch-side heap fragmentation and OOM crashes. | Large text sent from phone to watch is split into numbered chunks of max 2KB by the companion app. The watch reassembles segments as raw bytes (using an ArrayBuffer) before converting to string. Timeout of 10 seconds between chunks prevents hung transfers. `CHUNK_RESET` command aborts failed transfers. |
-| **C SDK Targets Emery/Gabbro**<br>The watch app targets Pebble Time 2 (Emery) and Round 2 (Gabbro). The C SDK itself supports the full Pebble family, but these are our target platforms. | Target only Emery and Gabbro. Development and testing uses emulators (`pebble install --emulator emery` / `--emulator gabbro`) until physical devices are available. |
+| **C SDK Targets All Pebble Platforms**<br>The Pebble C SDK supports the entire watch family — the prior Moddable/Alloy restriction to Emery/Gabbro no longer applies. Pure C apps compile and run on any platform with a microphone (Basalt, Chalk, Diorite) plus earlier B&W models without dictation (Aplite). | Target Emery, Gabbro, and Basalt for now (all confirmed building). Testing on emulator (`pebble install --emulator basalt`) or physical device. You can sideload via `pebble install --phone <IP>`. |
 | **PebbleKit JS and PebbleKit Android are mutually exclusive**<br>Per Pebble docs: "PebbleKit JS cannot be used in conjunction with PebbleKit Android or PebbleKit iOS." | Watch app has no `src/pkjs/index.js`. Messages route directly to companion app via PebbleKit Android 2. |
 | **Gemini Nano Android-Only**<br>AICore / Gemini Nano is only available on select Android devices (Pixel 8+, some Samsung). iOS has no equivalent on-device model. | iOS deferred to post-MVP. Android checks for AICore availability at startup; if unavailable, routes to cloud providers. |
 | **No Native Background Local LLM on Old Phones**<br>Older Android devices don't have AICore or Gemini Nano hardware enablement. | The companion app checks for system hardware features during first run. If local models are absent, the app routes to cloud providers (Phase 2 functionality). |

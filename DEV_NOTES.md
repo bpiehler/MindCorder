@@ -62,9 +62,9 @@ This meant two critical Pebble features — dictation and vibes — were inacces
 7. **State-machine init sentinel:** If your first `set_state()` call transitions to a state equal to the initial value of `s_state`, the early-return guard will silently skip it and no window will be pushed → `app_event_loop()` exits immediately. Initialize `s_state` to an out-of-range sentinel like `(AppState)0xFF` so the first call always passes the guard.
 
 **Build results:**
-- Platforms: emery (Pebble Time 2), gabbro (Pebble Round 2)
-- RAM footprint: ~21KB
-- Free RAM: ~110KB
+- Platforms: emery (Pebble Time 2, 200×228), gabbro (Pebble Round 2, 260×260 round), basalt (Pebble Time, 144×168)
+- RAM footprint: ~21KB on emery/gabbro (128KB heap), ~20KB on basalt (64KB heap)
+- Free RAM: ~110KB (emery/gabbro), ~45KB (basalt)
 - Build time: <0.5s
 
 **Known gaps (Phase 1 handoff):**

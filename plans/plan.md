@@ -42,16 +42,16 @@
 - [x] Configure `package.json`:
   - `projectType`: `"native"` (instead of `"moddable"`)
   - Keep UUID: `E2ECDBEB-2D2B-412F-AD1D-9059180EBC47`
-  - Keep `targetPlatforms`: `["emery", "gabbro"]`
+  - Keep `targetPlatforms`: `["emery", "gabbro", "basalt"]`
   - Keep `watchapp.watchface`: `false`
   - Keep message keys (same protocol)
   - Keep `companionApp.android` section
 - [x] Configure `wscript`:
   - Remove `js=` and `js_entry_file=` parameters
   - Single `pbl_build` source glob: `src/c/**/*.c`
-- [ ] Verify `pebble build` passes for emery and gabbro
-- [ ] Verify `pebble install --emulator emery` launches app
+- [x] Verify `pebble build` passes for emery, gabbro, and basalt
 
+- [x] Verify `pebble install --emulator gabbro` launches app
 ### 1.2 State Machine (main.c)
 
 The app runs a simple state machine. Each state maps to a UI screen. Transitions are driven by button presses and event callbacks.
@@ -324,13 +324,13 @@ watch/test/
 
 **Emulator tests (manual):**
 ```
-pebble install --emulator emery    # Visual + button verification
+pebble install --emulator basalt   # Basalt (rectangular 144x168) verification
 pebble install --emulator gabbro   # Round display layout verification
-pebble logs --emulator emery       # Console log monitoring
+pebble logs --emulator gabbro
 ```
 
 **Phase 1 exit criteria:**
-- [x] `pebble build` passes for emery and gabbro
+- [x] `pebble build` passes for emery, gabbro, and basalt
 - [x] App launches on emulators (tested on gabbro)
 - [x] Idle screen shows "MindCorder / Tap Select to Record"
 - [x] Select press transitions to listening screen
@@ -673,5 +673,5 @@ gcc -I mocks -Isrc/c test/runner.c test/test_storage.c \
     -o test/runner && ./test/runner
 
 # Emulator verification
-pebble build && pebble install --emulator emery
+pebble build && pebble install --emulator gabbro
 ```

@@ -697,3 +697,32 @@ pebble build && pebble install --emulator gabbro
 - [ ] Declare Android microphone permissions (`RECORD_AUDIO`) in `AndroidManifest.xml` and request them dynamically at runtime using `permission_handler`.
 - [ ] Implement `PhoneSpeechService` wrapping the native OS Google Speech-to-Text engine.
 - [ ] Route the final phone-side transcription payload directly into the unified `AIServiceRouter` pipeline, creating a new Drift DB note labeled with the source `"phone_voice"`.
+
+---
+
+## Phase 6: Timeline Grouping, Semantic Tagging & Customization (Power User Features)
+
+**Goal:** Elevate MindCorder from a chronological feed into a premium, organized, and custom "second brain" using advanced AI orchestration and modern gesture-driven Flutter layouts.
+
+### 6.1 Dynamic Timeline & Smart Grouping (UX/UI)
+- [ ] **Chronological Epoch Grouping**: Group notes dynamically by timeframes: "Today", "Yesterday", "This Week", "Last Week", "This Month", and "Older" (collapsing into Month/Year sections).
+- [ ] **Glassmorphic Floating Headers**: Implement floated sticky timeline section headers utilizing Flutter's `BackdropFilter` and elegant translucent shadows, snapping into place as the user scrolls.
+- [ ] **Interactive Vertical Thread**: Render a glowing vertical thread linking note cards, using physics-based spring animations (`flutter_physics`) to expand/collapse timeline groupings.
+
+### 6.2 AI Auto-Tagging & Taxonomy (Advanced AI)
+- [ ] **Approach A (Descriptor-Based Auto-Tagging - Recommended)**:
+  - Allow users to define tags (e.g., `Work`, `Shopping`, `Personal`) and enter a textual description or keywords explaining what that tag means (e.g., `Work` -> *"notes about AI, LLMs, product management, or Indeed"*).
+  - Feed these custom tag schemas and descriptions dynamically into the AI orchestrator's system prompt. The model analyzes the transcript and outputs the most appropriate tags alongside the JSON summary title and body.
+- [ ] **Approach B (Semantic Pattern Learning - Post-MVP)**:
+  - Allow the user to manually apply tags to notes. Over time, run a local classifier (or inject exemplars into prompt context) that learns the textual patterns, topics, and phrases associated with each tag to automate tag assignment more accurately.
+- [ ] **Tag Management UI**:
+  - Implement a sliding horizontal tag bar at the top of the note list for instant filtering.
+  - Create a Tag Manager view allowing users to easily add, customize, delete, or rename tags and descriptions.
+
+### 6.3 Semantic Vector Search (Local Embedding Search)
+- [ ] Integrate a lightweight local vector embedding model (e.g. running via Dart ONNX runtime or a local SQLite FTS5 extension).
+- [ ] Support semantic searches where concept-matching replaces exact keyword-matching (e.g., searching for *"groceries"* successfully surfaces notes that say *"need to buy milk"* or *"supermarket list"*).
+
+### 6.4 Custom System Prompt Override (Power User Prompts)
+- [ ] Add a secure, expandable text input section in the **Settings** page that allows power users to override the default summarization prompt (`AIParser.systemPrompt`).
+- [ ] Provide variables/tokens (e.g., `{transcription}`) to let users customize the summary formatting, style, length, focus (e.g. task extraction, journaling, translation), and tone.

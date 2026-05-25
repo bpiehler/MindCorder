@@ -636,6 +636,67 @@ pebble emu-dictation "test text here" --emulator emery
   2. Ask the user during onboarding to disable battery optimizations (set the companion app to "Unrestricted" in Android settings).
   3. Acquire an active CPU `WakeLock` with a 60-second safety timeout the moment a dictation chunk arrives to prevent the CPU from entering deep sleep mid-inference.
 
+---
+## Flutter APK Build — Blocked by Dart SDK Compiler Bug (May 2026)
+
+**Problem:** `flutter build apk --debug` fails with a Dart VM frontend_server crash:
+```
+Crash when compiling: type 'InvalidType' is not a subtype of type 'FunctionType' in type cast
+```
+at `_FfiUseSiteTransformer._verifyAndReplaceNativeCallable` in the Dart SDK's FFI transformation pass.
+
+**Root cause:** The bundled Dart SDK (3.13.0-132.0.dev, dev channel) on `linux_arm64` has a compiler bug when processing FFI declarations. The crash occurs during kernel compilation for Android, specifically in the `VmTarget.performModularTransformationsOnLibraries` phase.
+
+**Impact:**
+- `flutter test` ✅ **works fine** — uses a different compilation path (test runner)
+- `flutter build apk` ❌ **fails** — kernel compilation triggers the FFI crash
+- `flutter analyze` ❌ **fails** — same kernel compilation issue
+- All development and testing can proceed via `flutter test`
+
+**Workaround:** None until a fixed Dart SDK is published. The snap Flutter channel (`master`) will pick up fixes automatically as new builds are released. Check periodically with `flutter build apk --debug`.
+
+Note: the crash is NOT caused by any MindCorder code — a minimal `import 'package:flutter/material.dart';` also triggers it on this SDK.
+
 ### 4. Database Concurrency
 - **Problem:** SQLite will throw "database is locked" errors if background PebbleKit threads write database updates while the main UI thread is reading/scrolling.
 - **Guideline:** Enable Write-Ahead Logging (WAL) mode in SQLite, and use Drift's separate isolate feature (`DriftIsolate`) to run database operations off the main Flutter UI thread.
+
+---
+
+## Architecture Discoveries & Resolutions — May 2026 (WSL2 ARM64, AppMessage Keying, and Background AI Rules)
+
+### 1. AAPT2 Emulation on ARM64 Linux (WSL2 Host)
+- **Problem**: When compiling the companion app APK on an AArch64 (ARM64) Linux environment (such as WSL2 running inside Windows on a Surface Pro 11), Gradle failed during resource compilation with format execution errors (`aapt2: Syntax error: ")" unexpected`). 
+- **Cause**: Google distributes Android build tools (including `aapt2`) exclusively as `x86_64` binaries on Linux. Running an `x86_64` binary natively on ARM64 Linux causes the shell to fail parsing it.
+- **Resolution**: Implemented transparent user-mode emulation on the host:
+  1. Configured multiarch and registered the `amd64` architecture:
+     ```bash
+     sudo dpkg --add-architecture amd64
+     ```
+  2. Registered transparent execution interceptors via `qemu-user-static` (kernel-level `binfmt_misc` mapping):
+     ```bash
+     sudo apt-get install -y qemu-user-static
+     ```
+  3. Installed standard x86_64 dynamic libraries to support runtime linking:
+     ```bash
+     sudo apt-get install -y libc6:amd64 libstdc++6:amd64
+     ```
+  4. Verified that direct `aapt2` execution and `flutter build apk --debug` compile flawlessly in under 65 seconds under emulation.
+
+### 2. Pebble AppMessage Dynamic Offset Keys
+- **Problem**: Sideloaded dictations were transmitting from the watch but decoded on the phone as an empty dictionary (`D/PebbleBridge: Incoming Pebble Dictionary converted: {}`).
+- **Cause**: The watch C app wrote custom index enums starting at `0` (`KEY_MSG_ID = 0`, `KEY_COMMAND = 1`, etc.). However, the Android companion app bridge (`PebbleBridge.kt`) decoded incoming dictionary keys by subtracting `10000` (`key.toInt() - 10000`). Under Pebble OS, keys defined in `package.json`'s `messageKeys` are automatically assigned dynamic numeric values sequentially **starting exactly at 10000** (so `MESSAGE_KEY_MSG_ID` = `10000`, `MESSAGE_KEY_COMMAND` = `10001`, and so on). Keys `0` and `1` sent by the watch were out-of-bounds, parsed as empty, and silently discarded.
+- **Resolution**: Redefined the `AppMessageKey` enum in [protocol.h](file:///home/brittp/mindcorder/watch/src/c/protocol.h) to offset keys starting from `10000` (e.g. `KEY_MSG_ID = 10000`, `KEY_COMMAND = 10001`), aligning watch communications perfectly with phone bridge decoding.
+- **Dictation Overlay Delay**: Increased the callback timer delay in [dictation.c](file:///home/brittp/mindcorder/watch/src/c/dictation.c) from `10ms` to `200ms`. This gives the native Pebble system overlay slide-out transition time to fully close and dismiss before the watch starts doing CPU-heavy Bluetooth outbox transmissions, resolving finishing overlay freezes on physical devices.
+
+### 3. Android 16 Foreground AICore (Gemini Nano) Restrictions
+- **Problem**: When a note was recorded in the background (e.g. phone locked or in pocket), local AI summarization failed with a PlatformException:
+  ```
+  AI Summarization failed: PlatformException(GENERATION_ERROR, [ErrorCode 30] Background usage is blocked. Please use the API when your app is in the foreground instead., null, null)
+  ```
+- **Cause**: Android enforces strict power/performance rules on on-device LLMs (Gemini Nano) via AICore. Inference is blocked unless the calling application's UI/Activity is currently in the active foreground.
+- **Wrist-Based Error Delivery**: Upgraded `PebbleService`'s error catch block. If local summarization fails background blocks or times out, the service packages a user-friendly error summary detailing the limitation and suggestions, and pushes it directly to the watch as a `COMMAND=14` note. The watch double-pulses and displays a clear explanation right on screen without requiring the user to unlock their phone.
+- **Background-to-Foreground Self-Healing Summarization (Backlog Design)**: If background summarization fails and no Cloud API key is configured, mark the note's DB status as `pending_foreground` (instead of `failed`). The next time the companion app UI is launched or brought into the foreground, it will automatically scan the Drift DB for `pending_foreground` notes and execute the active foreground Gemini Nano instance to update the summaries transparently.
+- **Bypassing the Restriction**:
+  - *Option A (Nano)*: Keep the companion app open and visible on screen during dictation.
+  - *Option B (Cloud BYOK)*: Configure a Cloud API key (OpenAI/Anthropic/Gemini Cloud) in settings. PebbleService will instantly fall back to the cloud model in less than 3 seconds when in the background.

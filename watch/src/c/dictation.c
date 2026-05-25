@@ -19,7 +19,7 @@ static void dictation_callback(DictationSession *session, DictationSessionStatus
     s_transcription[0] = '\0';
   }
 
-  app_timer_register(10, handle_dictation_result, NULL);
+  app_timer_register(200, handle_dictation_result, NULL);
 }
 
 bool dictation_init(void) {
@@ -43,7 +43,11 @@ bool dictation_start(void) {
   s_last_status = (DictationSessionStatus)-1;
 
   DictationSessionStatus result = dictation_session_start(s_session);
-  return result == DictationSessionStatusSuccess;
+  if (result != DictationSessionStatusSuccess) {
+    s_in_progress = false;
+    return false;
+  }
+  return true;
 }
 
 void dictation_cancel(void) {

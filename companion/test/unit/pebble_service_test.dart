@@ -153,7 +153,7 @@ void main() {
       expect(sentMessages.last['COMPLETE'], equals(1));
     });
 
-    test('should send CHUNK_RESET (COMMAND=13) to watch if AI summarization fails', () async {
+    test('should send descriptive error (COMMAND=14) to watch if AI summarization fails', () async {
       aiService.failNext = true;
 
       final watchUpload = {
@@ -173,10 +173,12 @@ void main() {
 
       // Check messages:
       // First: COMMAND=10 (Summarizing...)
-      // Second: COMMAND=13 (CHUNK_RESET/Abort)
+      // Second: COMMAND=14 (Descriptive Error Summary)
       expect(sentMessages.length, equals(2));
       expect(sentMessages[0]['COMMAND'], equals(10));
-      expect(sentMessages[1]['COMMAND'], equals(13));
+      expect(sentMessages[1]['COMMAND'], equals(14));
+      expect(sentMessages[1]['TITLE'], equals('AI Error'));
+      expect(sentMessages[1]['BODY'], contains('AI Model Error'));
     });
 
     test('should return note from DB on note fetch request (COMMAND=2)', () async {

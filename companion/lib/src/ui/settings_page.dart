@@ -1,4 +1,4 @@
-import 'package:flutter/material';
+import 'package:flutter/material.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:provider/provider.dart';
 import '../ai/ai_service.dart';
@@ -57,7 +57,7 @@ class _SettingsPageState extends State<SettingsPage> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Settings saved successfully'),
-          backgroundColor: Colors.emerald,
+          backgroundColor: const Color(0xFF10B981),
         ),
       );
     }
@@ -108,7 +108,7 @@ class _SettingsPageState extends State<SettingsPage> {
         elevation: 0,
         actions: [
           IconButton(
-            icon: const Icon(Icons.check, color: Colors.emerald),
+            icon: const Icon(Icons.check, color: const Color(0xFF10B981)),
             onPressed: _saveSettings,
           ),
         ],
@@ -239,16 +239,16 @@ class _SettingsPageState extends State<SettingsPage> {
                   width: double.infinity,
                   padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(
-                    color: _testSuccess ? Colors.emerald.withOpacity(0.1) : Colors.redAccent.withOpacity(0.1),
+                    color: _testSuccess ? const Color(0xFF10B981).withOpacity(0.1) : Colors.redAccent.withOpacity(0.1),
                     borderRadius: BorderRadius.circular(8),
                     border: Border.all(
-                      color: _testSuccess ? Colors.emerald.withOpacity(0.3) : Colors.redAccent.withOpacity(0.3),
+                      color: _testSuccess ? const Color(0xFF10B981).withOpacity(0.3) : Colors.redAccent.withOpacity(0.3),
                     ),
                   ),
                   child: Text(
                     _testResult!,
                     style: TextStyle(
-                      color: _testSuccess ? Colors.emerald : Colors.redAccent,
+                      color: _testSuccess ? const Color(0xFF10B981) : Colors.redAccent,
                       fontSize: 12,
                     ),
                   ),

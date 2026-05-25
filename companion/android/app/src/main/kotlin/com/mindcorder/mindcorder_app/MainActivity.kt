@@ -5,12 +5,14 @@ import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.EventChannel
 import io.rebble.pebblekit2.client.DefaultPebbleSender
-import io.rebble.pebblekit2.client.PebbleDictionary
-import io.rebble.pebblekit2.client.PebbleKit
+import io.rebble.pebblekit2.client.DefaultPebbleInfoRetriever
+import io.rebble.pebblekit2.common.model.PebbleDictionaryItem
+import io.rebble.pebblekit2.common.model.PebbleDictionary
 import java.util.UUID
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.first
 
 class MainActivity : FlutterActivity() {
     private val CHANNEL_METHOD = "mindcorder/pebble_methods"
@@ -21,10 +23,9 @@ class MainActivity : FlutterActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
-        
+
         pebbleSender = DefaultPebbleSender(context)
 
-        // Setup EventChannel for incoming messages
         EventChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL_EVENT).setStreamHandler(
             object : EventChannel.StreamHandler {
                 override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
@@ -37,7 +38,6 @@ class MainActivity : FlutterActivity() {
             }
         )
 
-        // Setup MethodChannel for outgoing commands
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL_METHOD).setMethodCallHandler { call, result ->
             when (call.method) {
                 "sendToWatch" -> {
@@ -49,16 +49,23 @@ class MainActivity : FlutterActivity() {
                     }
                 }
                 "isWatchConnected" -> {
-                    val connected = PebbleKit.isWatchConnected(context)
-                    result.success(connected)
+                    scope.launch {
+                        val infoRetriever = DefaultPebbleInfoRetriever(context)
+                        val connected = infoRetriever.getConnectedWatches().first().isNotEmpty()
+                        result.success(connected)
+                    }
                 }
                 "startAppOnWatch" -> {
-                    PebbleKit.startAppOnPebble(context, watchappUuid)
-                    result.success(true)
+                    scope.launch {
+                        pebbleSender.startAppOnTheWatch(watchappUuid)
+                        result.success(true)
+                    }
                 }
                 "stopAppOnWatch" -> {
-                    PebbleKit.closeAppOnPebble(context, watchappUuid)
-                    result.success(true)
+                    scope.launch {
+                        pebbleSender.stopAppOnTheWatch(watchappUuid)
+                        result.success(true)
+                    }
                 }
                 else -> {
                     result.notImplemented()
@@ -67,24 +74,25 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    @OptIn(ExperimentalUnsignedTypes::class)
     private fun sendDataToWatch(dataMap: Map<String, Any>, result: MethodChannel.Result) {
-        val dict = PebbleDictionary()
-        
         val keys = arrayOf(
             "MSG_ID", "COMMAND", "RAW_TEXT", "NOTE_ID", "SUMMARY_CHUNK",
             "CHUNK_INDEX", "CHUNK_TOTAL", "CHUNK_RESET", "TITLE", "BODY",
             "COMPLETE", "FETCH_NOTE", "SESSION_ID"
         )
 
-        for ((key, value) in dataMap) {
-            val keyIndex = keys.indexOf(key)
-            if (keyIndex != -1) {
-                val mappedKey = 10000 + keyIndex
-                when (value) {
-                    is Int -> dict.addInteger(mappedKey, value.toLong())
-                    is Long -> dict.addInteger(mappedKey, value)
-                    is String -> dict.addString(mappedKey, value)
-                    is Boolean -> dict.addInteger(mappedKey, if (value) 1 else 0)
+        val dict: PebbleDictionary = mutableMapOf<UInt, PebbleDictionaryItem>().apply {
+            for ((key, value) in dataMap) {
+                val keyIndex = keys.indexOf(key)
+                if (keyIndex != -1) {
+                    val mappedKey = 10000u + keyIndex.toUInt()
+                    when (value) {
+                        is Int -> put(mappedKey, PebbleDictionaryItem.Int32(value))
+                        is Long -> put(mappedKey, PebbleDictionaryItem.Int32(value.toInt()))
+                        is String -> put(mappedKey, PebbleDictionaryItem.Text(value))
+                        is Boolean -> put(mappedKey, PebbleDictionaryItem.Int32(if (value) 1 else 0))
+                    }
                 }
             }
         }

@@ -41,6 +41,15 @@ Adds a settings screen inside the mobile companion app:
 * **Cloud Fallback:** When Gemini Nano is unavailable (older Android devices), the app automatically routes to the configured cloud provider.
 
 
+### Phase 5: Mobile-Native Voice Capture (Post-MVP Expansion)
+
+Allows the user to capture thoughts directly on the phone when the watch is disconnected or unavailable.
+* **Dual 'Add' Options**: The Floating Action Button (FAB) on the mobile note list expands to present two explicit options:
+  1. **Add Text**: Type or paste a transcript manually (the existing simulator/manual entry).
+  2. **Add Voice**: Opens a full-screen, high-fidelity recording sheet using the phone's native microphone (via the `speech_to_text` Flutter package) to capture and transcribe spoken audio in real-time.
+* **Unified Pipeline**: The resulting phone-side transcript feeds into the same local Gemini Nano / Cloud BYOK orchestration service and saves directly to the shared database under note source `"phone_voice"`.
+
+
 ## 3. High-Level System Architecture
 
 The architecture enforces strict separation of concerns: the watch functions as an input/output terminal, while the phone acts as the central engine.
@@ -144,6 +153,8 @@ v
 | **PebbleKit JS and PebbleKit Android are mutually exclusive**<br>Per Pebble docs: "PebbleKit JS cannot be used in conjunction with PebbleKit Android or PebbleKit iOS." | Watch app has no `src/pkjs/index.js`. Messages route directly to companion app via PebbleKit Android 2. |
 | **Gemini Nano Android-Only**<br>AICore / Gemini Nano is only available on select Android devices (Pixel 8+, some Samsung). iOS has no equivalent on-device model. | iOS deferred to post-MVP. Android checks for AICore availability at startup; if unavailable, routes to cloud providers. |
 | **No Native Background Local LLM on Old Phones**<br>Older Android devices don't have AICore or Gemini Nano hardware enablement. | The companion app checks for system hardware features during first run. If local models are absent, the app routes to cloud providers (Phase 2 functionality). |
+| **AppMessage Key Offsets**<br>Pebble OS dynamically generates message keys starting at index `10000` sequentially in the order listed in `package.json`. Custom enums must not use standard `0`-based indices. | Define C-level enums in `protocol.h` to start exactly at `10000` (e.g., `KEY_MSG_ID = 10000`) so that the phone's native bridge (which subtracts `10000` to find the key name index) parses keys successfully. |
+| **Android 16 Background AI Limits**<br>Android AICore blocks local Gemini Nano summarization if the companion app is running in the background. | 1. Implement foreground emulation (keep app open on phone screen).<br>2. Fall back to cloud API keys (BYOK) for true zero-friction background use.<br>3. Handle blocks gracefully by building an error notification summary and sending it as a `COMMAND=14` note to the watch, double-pulsing haptics and showing a clear explanation on-wrist. |
 | **Watch Storage Constraints**<br>Watch flash storage is finite. The C SDK `Storage` API supports arbitrary binary blobs (no 256-byte `persist` limit), but total space is limited (~64KB). | Store only titles + metadata on watch. Full content lives on phone. Cache only the most-recently-viewed note body; evict older cached bodies. |
 | **Bluetooth Message Duplication**<br>AppMessage can deliver the same message twice due to ACK/NACK ambiguity. | Monotonic `MSG_ID` counter on every message. Both watch and phone track last processed ID and silently drop duplicates. |
 | **Dictation & Vibes Available Natively in C**<br>Dictation and vibes are available as standard C SDK calls (`dictation_session_create`, `vibes_double_pulse`). No bridge layer needed — pure C apps call these directly. | The C watch app calls Pebble dictation and vibes APIs directly. No JS bridge, no FFI, no build-tool patching required. |

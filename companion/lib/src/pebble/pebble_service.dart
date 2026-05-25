@@ -164,22 +164,46 @@ class PebbleService {
     } catch (e) {
       print("AI Summarization failed: $e");
       
+      String errorTitle = 'AI Error';
+      String errorBody = 'Summarization failed: $e';
+      
+      if (e.toString().contains('Background usage is blocked') || 
+          e.toString().contains('ErrorCode 30')) {
+        errorTitle = 'BG Blocked';
+        errorBody = 'Local Gemini Nano cannot run in the background. '
+            'Please open the companion app on your phone to keep it in the foreground, '
+            'or configure a Cloud API Key (OpenAI, Anthropic, or Gemini Cloud) in Settings '
+            'for seamless background processing!';
+      } else if (e.toString().contains('TimeoutException') || 
+                 e.toString().contains('timed out')) {
+        errorTitle = 'Timeout';
+        errorBody = 'The summarization request timed out. '
+            'Please try again, or configure a Cloud API Key in Settings for faster responses!';
+      }
+      
       // Update DB to failed
       final originalNote = await database.getNoteById(dbId);
       if (originalNote != null) {
         await database.updateNoteEntry(originalNote.copyWith(
           processingStatus: 'failed',
-          summaryTitle: const Value('Failed'),
-          summaryBody: Value('Summarization failed: $e'),
+          summaryTitle: Value(errorTitle),
+          summaryBody: Value(errorBody),
+          bodyPlainText: Value(errorBody),
         ));
       }
 
-      // Notify watch to abort/reset reassembly
-      await sendMapToWatch({
-        'COMMAND': 13, // CHUNK_RESET
-        'SESSION_ID': _sessionId,
-        'MSG_ID': _outgoingMsgId++,
-      });
+      // Send the error message directly to the watch so the user is informed
+      try {
+        await _sendSummaryToWatch(errorTitle, errorBody);
+      } catch (sendError) {
+        print("Failed to send error notification to watch: $sendError");
+        // Fallback to sending CHUNK_RESET in case of communication failure
+        await sendMapToWatch({
+          'COMMAND': 13, // CHUNK_RESET
+          'SESSION_ID': _sessionId,
+          'MSG_ID': _outgoingMsgId++,
+        });
+      }
     }
   }
 

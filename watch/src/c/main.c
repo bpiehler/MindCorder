@@ -59,7 +59,7 @@ void select_click_handler(void *context, void *data) {
   switch (s_state) {
     case STATE_IDLE:
       if (dictation_start()) {
-        set_state(STATE_LISTENING);
+        s_state = STATE_LISTENING;
       }
       break;
     case STATE_SUMMARY_READY:

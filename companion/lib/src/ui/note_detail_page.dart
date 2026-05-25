@@ -1,9 +1,8 @@
-import 'package:flutter/material';
+import 'package:flutter/material.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:provider/provider.dart';
 import 'package:go_router/go_router.dart';
 import '../data/database.dart';
-import 'package:drift/drift.dart' as drift;
 
 class NoteDetailPage extends StatefulWidget {
   final int noteId;
@@ -57,7 +56,7 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
                   color: note.isPinned ? const Color(0xFF6366F1) : Colors.blueGrey,
                 ),
                 onPressed: () {
-                  database.updateNoteEntry(note.copyWith(isPinned: drift.Value(!note.isPinned)));
+                  database.updateNoteEntry(note.copyWith(isPinned: !note.isPinned));
                   setState(() {});
                 },
               ),
@@ -139,13 +138,11 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
   }
 
   Widget _buildRawTranscriptDrawer(String rawText) {
-    return Container(
-      decoration: const BoxDecoration(
-        color: Color(0xFF1E293B),
-        borderRadius: BorderRadius.only(
-          topLeft: Radius.circular(16),
-          topRight: Radius.circular(16),
-        ),
+    return Material(
+      color: const Color(0xFF1E293B),
+      borderRadius: const BorderRadius.only(
+        topLeft: Radius.circular(16),
+        topRight: Radius.circular(16),
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,

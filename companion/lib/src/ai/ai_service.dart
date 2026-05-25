@@ -248,7 +248,7 @@ class AIServiceRouter implements AIService {
     if (mode == 'nano') {
       if (await _nanoService.isAvailable()) {
         return await _nanoService.summarize(rawText).timeout(
-          const Duration(seconds: 8),
+          const Duration(seconds: 15),
           onTimeout: () => throw Exception("Gemini Nano timed out"),
         );
       }
@@ -263,7 +263,7 @@ class AIServiceRouter implements AIService {
     if (await _nanoService.isAvailable()) {
       try {
         return await _nanoService.summarize(rawText).timeout(
-          const Duration(seconds: 8),
+          const Duration(seconds: 15),
         );
       } catch (_) {
         // Fallback to cloud if nano fails or times out

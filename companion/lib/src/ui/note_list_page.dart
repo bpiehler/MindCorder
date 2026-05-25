@@ -1,4 +1,4 @@
-import 'package:flutter/material';
+import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:go_router/go_router.dart';
 import '../data/database.dart';
@@ -14,10 +14,12 @@ class NoteListPage extends StatefulWidget {
 
 class _NoteListPageState extends State<NoteListPage> {
   bool _isWatchConnected = false;
+  late final Stream<List<Note>> _notesStream;
 
   @override
   void initState() {
     super.initState();
+    _notesStream = Provider.of<AppDatabase>(context, listen: false).watchAllNotes();
     _checkWatchConnection();
     // Periodically update watch connection status
     Stream.periodic(const Duration(seconds: 4)).listen((_) {
@@ -64,11 +66,11 @@ class _NoteListPageState extends State<NoteListPage> {
               height: 8,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                color: _isWatchConnected ? Colors.emerald : Colors.blueGrey,
+                color: _isWatchConnected ? const Color(0xFF10B981) : Colors.blueGrey,
                 boxShadow: _isWatchConnected
                     ? [
                         BoxShadow(
-                          color: Colors.emerald.withOpacity(0.5),
+                          color: const Color(0xFF10B981).withOpacity(0.5),
                           spreadRadius: 2,
                           blurRadius: 4,
                         )
@@ -81,7 +83,7 @@ class _NoteListPageState extends State<NoteListPage> {
               _isWatchConnected ? 'Pebble Connected' : 'Watch Offline',
               style: TextStyle(
                 fontSize: 10,
-                color: _isWatchConnected ? Colors.emerald : Colors.blueGrey,
+                color: _isWatchConnected ? const Color(0xFF10B981) : Colors.blueGrey,
               ),
             ),
           ],
@@ -94,7 +96,7 @@ class _NoteListPageState extends State<NoteListPage> {
         ],
       ),
       body: StreamBuilder<List<Note>>(
-        stream: database.watchAllNotes(),
+        stream: _notesStream,
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
             return const Center(
@@ -168,7 +170,7 @@ class _NoteListPageState extends State<NoteListPage> {
       ),
       direction: DismissDirection.endToStart,
       onDismissed: (_) {
-        database.updateNoteEntry(note.copyWith(isArchived: const Value(true)));
+        database.updateNoteEntry(note.copyWith(isArchived: true));
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Note "${note.summaryTitle ?? "Untitled"}" archived'),
@@ -361,7 +363,7 @@ class _NoteListPageState extends State<NoteListPage> {
                 if (text.isNotEmpty) {
                   // Simulate watch upload
                   final watchId = DateTime.now().millisecondsSinceEpoch ~/ 1000;
-                  pebbleService.sendMapToWatch({
+                  pebbleService.handleWatchMessage({
                     'COMMAND': 1,
                     'RAW_TEXT': text,
                     'NOTE_ID': watchId,

@@ -12,6 +12,7 @@ typedef enum {
 } AppState;
 
 static AppState s_state = (AppState)0xFF;
+static AppState s_prior_state = STATE_IDLE;
 uint32_t s_outgoing_msg_id = 0;
 uint32_t s_last_incoming_msg_id = 0;
 uint32_t s_session_id = 0;
@@ -55,7 +56,21 @@ extern void set_connection_status(bool connected);
 
 static void set_state(AppState new_state);
 
+static const char* state_to_string(AppState state) {
+  switch (state) {
+    case STATE_IDLE: return "IDLE";
+    case STATE_LISTENING: return "LISTENING";
+    case STATE_PROCESSING: return "PROCESSING";
+    case STATE_SUMMARY_READY: return "SUMMARY_READY";
+    case STATE_NOTELIST: return "NOTELIST";
+    case STATE_FETCHING: return "FETCHING";
+    case STATE_ERROR: return "ERROR";
+    default: return "UNKNOWN";
+  }
+}
+
 void select_click_handler(void *context, void *data) {
+  APP_LOG(APP_LOG_LEVEL_DEBUG, "Button Click: SELECT in %s", state_to_string(s_state));
   switch (s_state) {
     case STATE_IDLE:
       if (dictation_start()) {
@@ -86,21 +101,28 @@ void select_click_handler(void *context, void *data) {
   }
 }
 
-static void back_click_handler(void *context, void *data) {
+void back_click_handler(void *context, void *data) {
+  APP_LOG(APP_LOG_LEVEL_DEBUG, "Button Click: BACK in %s", state_to_string(s_state));
   switch (s_state) {
     case STATE_LISTENING:
       dictation_cancel();
       set_state(STATE_IDLE);
       break;
     case STATE_PROCESSING:
-    case STATE_SUMMARY_READY:
+    case STATE_ERROR:
       set_state(STATE_IDLE);
+      break;
+    case STATE_SUMMARY_READY:
+      if (s_prior_state == STATE_PROCESSING || s_prior_state == STATE_LISTENING) {
+        set_state(STATE_IDLE);
+      } else {
+        set_state(s_prior_state);
+      }
+      break;
+    case STATE_FETCHING:
+      set_state(STATE_NOTELIST);
       break;
     case STATE_NOTELIST:
-    case STATE_FETCHING:
-      set_state(STATE_IDLE);
-      break;
-    case STATE_ERROR:
       set_state(STATE_IDLE);
       break;
     default:
@@ -109,16 +131,26 @@ static void back_click_handler(void *context, void *data) {
 }
 
 static void up_click_handler(void *context, void *data) {
+  APP_LOG(APP_LOG_LEVEL_DEBUG, "Button Click: UP in %s", state_to_string(s_state));
+  if (s_state == STATE_IDLE) {
+    set_state(STATE_NOTELIST);
+  }
 }
 
 static void down_click_handler(void *context, void *data) {
+  APP_LOG(APP_LOG_LEVEL_DEBUG, "Button Click: DOWN in %s", state_to_string(s_state));
+  if (s_state == STATE_IDLE) {
+    set_state(STATE_NOTELIST);
+  }
 }
 
 void click_config_provider(void *context) {
   window_single_click_subscribe(BUTTON_ID_SELECT, select_click_handler);
   window_single_click_subscribe(BUTTON_ID_UP, up_click_handler);
   window_single_click_subscribe(BUTTON_ID_DOWN, down_click_handler);
-  window_single_click_subscribe(BUTTON_ID_BACK, back_click_handler);
+  if (s_state != STATE_IDLE) {
+    window_single_click_subscribe(BUTTON_ID_BACK, back_click_handler);
+  }
 }
 
 void handle_dictation_result(void *data) {
@@ -172,9 +204,10 @@ void handle_incoming_data(uint8_t command, DictionaryIterator *iter) {
       }
 
       if (idx->value->int32 != chunk_index++) break;
-      int datalen = data->length;
-      if (accumulated + datalen > MAX_TOTAL_BODY) break;
-      memcpy(reassembly_buf + accumulated, data->value->data, datalen);
+      const char *chunk_str = data->value->cstring;
+      int datalen = strlen(chunk_str);
+      if (accumulated + datalen >= (int)sizeof(reassembly_buf)) break;
+      memcpy(reassembly_buf + accumulated, chunk_str, datalen);
       accumulated += datalen;
 
       tuple = dict_find(iter, KEY_COMPLETE);
@@ -214,6 +247,15 @@ void handle_incoming_data(uint8_t command, DictionaryIterator *iter) {
 
 static void set_state(AppState new_state) {
   if (s_state == new_state && new_state != STATE_ERROR) return;
+
+  APP_LOG(APP_LOG_LEVEL_DEBUG, "Navigation: %s -> %s", state_to_string(s_state), state_to_string(new_state));
+
+  if (new_state == STATE_SUMMARY_READY || new_state == STATE_FETCHING) {
+    if (s_state != STATE_FETCHING) {
+      s_prior_state = s_state;
+    }
+  }
+
   s_state = new_state;
 
   switch (new_state) {
@@ -242,6 +284,17 @@ static void set_state(AppState new_state) {
       window_error_push(s_error_message);
       break;
   }
+}
+
+void force_state_idle(void) {
+  if (s_state != STATE_IDLE) {
+    APP_LOG(APP_LOG_LEVEL_DEBUG, "Force state synchronization: %s -> IDLE", state_to_string(s_state));
+    s_state = STATE_IDLE;
+  }
+}
+
+bool is_current_state_notelist(void) {
+  return s_state == STATE_NOTELIST;
 }
 
 static void init(void) {

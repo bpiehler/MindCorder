@@ -1,7 +1,9 @@
 #include <pebble.h>
 #include "protocol.h"
 
-#define STORAGE_KEY_INDEX 0x10
+#define STORAGE_KEY_INDEX_COUNT 0x10
+#define STORAGE_KEY_INDEX_IDS   0x11
+#define STORAGE_KEY_CACHED_BODY_ID 0x12
 #define STORAGE_KEY_META_BASE 0x100
 #define STORAGE_KEY_BODY_BASE 0x1000
 
@@ -16,11 +18,11 @@ typedef struct {
 } __attribute__((packed)) NoteMeta;
 
 void storage_init(void) {
-  int bytes_read = persist_read_data(STORAGE_KEY_INDEX, &s_note_count, sizeof(s_note_count));
+  int bytes_read = persist_read_data(STORAGE_KEY_INDEX_COUNT, &s_note_count, sizeof(s_note_count));
   if (bytes_read == sizeof(s_note_count) && s_note_count > 0 && s_note_count <= MAX_NOTES) {
     int ids_size = s_note_count * sizeof(uint32_t);
-    int total = persist_read_data(STORAGE_KEY_INDEX, s_note_ids, sizeof(s_note_count) + ids_size);
-    if (total != (int)(sizeof(s_note_count) + ids_size)) {
+    int total = persist_read_data(STORAGE_KEY_INDEX_IDS, s_note_ids, ids_size);
+    if (total != ids_size) {
       s_note_count = 0;
     }
   } else {
@@ -54,13 +56,23 @@ void storage_add_note(uint32_t note_id, const char *title) {
     s_note_ids[0] = note_id;
   }
 
-  persist_write_data(STORAGE_KEY_INDEX, &s_note_count, sizeof(s_note_count));
-  persist_write_data(STORAGE_KEY_INDEX, s_note_ids, s_note_count * sizeof(uint32_t));
+  persist_write_data(STORAGE_KEY_INDEX_COUNT, &s_note_count, sizeof(s_note_count));
+  persist_write_data(STORAGE_KEY_INDEX_IDS, s_note_ids, s_note_count * sizeof(uint32_t));
 }
 
 void storage_cache_body(uint32_t note_id, const char *body) {
+  uint32_t old_cached_id = 0;
+  if (persist_exists(STORAGE_KEY_CACHED_BODY_ID)) {
+    persist_read_data(STORAGE_KEY_CACHED_BODY_ID, &old_cached_id, sizeof(old_cached_id));
+  }
+
+  if (old_cached_id != 0 && old_cached_id != note_id) {
+    persist_delete(STORAGE_KEY_BODY_BASE + old_cached_id);
+  }
+
   size_t len = strlen(body) + 1;
   persist_write_data(STORAGE_KEY_BODY_BASE + note_id, body, len);
+  persist_write_data(STORAGE_KEY_CACHED_BODY_ID, &note_id, sizeof(note_id));
 }
 
 bool storage_get_cached_body(uint32_t note_id, char *buf, size_t bufsize) {

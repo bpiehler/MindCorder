@@ -57,5 +57,8 @@ extern char s_current_body[];
 extern char s_error_message[];
 extern void click_config_provider(void *context);
 extern void select_click_handler(void *context, void *data);
+extern void force_state_idle(void);
+extern bool is_current_state_notelist(void);
+extern void back_click_handler(void *context, void *data);
 
 #endif

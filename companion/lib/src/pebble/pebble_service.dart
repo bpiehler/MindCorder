@@ -221,13 +221,14 @@ class PebbleService {
   }
 
   Future<void> _sendSummaryToWatch(String title, String bodyPlainText) async {
-    final utf8Bytes = utf8.encode(bodyPlainText);
-    final totalLength = utf8Bytes.length;
+    final totalChars = bodyPlainText.length;
 
-    // Standard Alloy maximum buffer chunk size is 2KB (2048 bytes)
-    const maxChunkSize = 2000; 
+    // Standard AppMessage maximum text buffer chunk size is 2KB.
+    // 500 characters is extremely safe and will never exceed 2KB (even with 4-byte UTF-8 emojis/characters),
+    // while preventing any multi-byte character boundary splitting!
+    const maxChunkSize = 500; 
 
-    if (totalLength <= maxChunkSize) {
+    if (totalChars <= maxChunkSize) {
       // Small payload: send in a single COMMAND=14 packet
       await sendMapToWatch({
         'COMMAND': 14,
@@ -237,11 +238,11 @@ class PebbleService {
         'MSG_ID': _outgoingMsgId++,
       });
     } else {
-      // Large payload: split into chunks and send via sequential COMMAND=11 packets
-      final chunks = <List<int>>[];
-      for (var i = 0; i < totalLength; i += maxChunkSize) {
-        final end = (i + maxChunkSize < totalLength) ? i + maxChunkSize : totalLength;
-        chunks.add(utf8Bytes.sublist(i, end));
+      // Large payload: split into chunks by character boundaries and send via sequential COMMAND=11 packets
+      final chunks = <String>[];
+      for (var i = 0; i < totalChars; i += maxChunkSize) {
+        final end = (i + maxChunkSize < totalChars) ? i + maxChunkSize : totalChars;
+        chunks.add(bodyPlainText.substring(i, end));
       }
 
       final chunkTotal = chunks.length;
@@ -256,10 +257,9 @@ class PebbleService {
 
       // Send each chunk sequentially
       for (var index = 0; index < chunkTotal; index++) {
-        final chunkText = utf8.decode(chunks[index]);
         await sendMapToWatch({
           'COMMAND': 11,
-          'SUMMARY_CHUNK': chunkText,
+          'SUMMARY_CHUNK': chunks[index],
           'CHUNK_INDEX': index,
           'CHUNK_TOTAL': chunkTotal,
           'SESSION_ID': _sessionId,

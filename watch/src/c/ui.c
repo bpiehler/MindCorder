@@ -2,7 +2,20 @@
 #include "protocol.h"
 
 Window *s_window = NULL;
+static Window *s_idle_window = NULL;
 static bool s_phone_connected = false;
+
+static void safe_window_push(Window *new_window, bool animated) {
+  Window *old_window = s_window;
+  s_window = new_window;
+  if (new_window) {
+    window_stack_push(new_window, animated);
+  }
+  if (old_window) {
+    window_stack_remove(old_window, false);
+    window_destroy(old_window);
+  }
+}
 
 extern int storage_get_note_count(void);
 extern bool storage_get_note_id(int index, uint32_t *note_id);
@@ -31,17 +44,20 @@ static void idle_window_load(Window *window) {
 static void idle_window_unload(Window *window) {
   text_layer_destroy(s_idle_subtitle);
   text_layer_destroy(s_idle_title);
+  if (s_idle_window == window) {
+    s_idle_window = NULL;
+  }
 }
 
 void window_idle_push(void) {
-  if (s_window) window_destroy(s_window);
-  s_window = window_create();
-  window_set_window_handlers(s_window, (WindowHandlers){
+  Window *win = window_create();
+  s_idle_window = win;
+  window_set_window_handlers(win, (WindowHandlers){
     .load = idle_window_load,
     .unload = idle_window_unload,
   });
-  window_set_click_config_provider(s_window, click_config_provider);
-  window_stack_push(s_window, true);
+  window_set_click_config_provider(win, click_config_provider);
+  safe_window_push(win, true);
 }
 
 // ---- Listening Screen ----
@@ -63,16 +79,13 @@ static void listening_window_unload(Window *window) {
 }
 
 void window_listening_push(void) {
-  if (s_window) {
-    window_destroy(s_window);
-  }
-  s_window = window_create();
-  window_set_window_handlers(s_window, (WindowHandlers){
+  Window *win = window_create();
+  window_set_window_handlers(win, (WindowHandlers){
     .load = listening_window_load,
     .unload = listening_window_unload,
   });
-  window_set_click_config_provider(s_window, click_config_provider);
-  window_stack_push(s_window, true);
+  window_set_click_config_provider(win, click_config_provider);
+  safe_window_push(win, true);
 }
 
 // ---- Processing Screen ----
@@ -104,14 +117,13 @@ static void processing_window_unload(Window *window) {
 }
 
 void window_processing_push(void) {
-  if (s_window) window_destroy(s_window);
-  s_window = window_create();
-  window_set_window_handlers(s_window, (WindowHandlers){
+  Window *win = window_create();
+  window_set_window_handlers(win, (WindowHandlers){
     .load = processing_window_load,
     .unload = processing_window_unload,
   });
-  window_set_click_config_provider(s_window, click_config_provider);
-  window_stack_push(s_window, true);
+  window_set_click_config_provider(win, click_config_provider);
+  safe_window_push(win, true);
 }
 
 void update_processing_title(const char *title) {
@@ -121,39 +133,70 @@ void update_processing_title(const char *title) {
 }
 
 // ---- Summary Screen ----
+static ScrollLayer *s_summary_scroll;
 static TextLayer *s_summary_title, *s_summary_body;
+
+static void summary_scroll_click_config_provider(void *context) {
+  window_single_click_subscribe(BUTTON_ID_SELECT, select_click_handler);
+  window_single_click_subscribe(BUTTON_ID_BACK, back_click_handler);
+}
 
 static void summary_window_load(Window *window) {
   Layer *root = window_get_root_layer(window);
   GRect bounds = layer_get_bounds(root);
 
-  s_summary_title = text_layer_create(GRect(10, 5, bounds.size.w - 20, 30));
+  s_summary_scroll = scroll_layer_create(bounds);
+  scroll_layer_set_callbacks(s_summary_scroll, (ScrollLayerCallbacks){
+    .click_config_provider = summary_scroll_click_config_provider
+  });
+  scroll_layer_set_click_config_onto_window(s_summary_scroll, window);
+
+#ifdef PBL_ROUND
+  scroll_layer_set_paging(s_summary_scroll, true);
+#endif
+
+  s_summary_title = text_layer_create(GRect(10, PBL_IF_ROUND_ELSE(20, 10), bounds.size.w - 20, 30));
   text_layer_set_text(s_summary_title, s_current_title);
   text_layer_set_font(s_summary_title, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD));
   text_layer_set_text_alignment(s_summary_title, GTextAlignmentCenter);
-  layer_add_child(root, text_layer_get_layer(s_summary_title));
 
-  s_summary_body = text_layer_create(GRect(10, 40, bounds.size.w - 20, bounds.size.h - 50));
+  s_summary_body = text_layer_create(GRect(10, PBL_IF_ROUND_ELSE(55, 45), bounds.size.w - 20, 2000));
   text_layer_set_text(s_summary_body, s_current_body);
   text_layer_set_font(s_summary_body, fonts_get_system_font(FONT_KEY_GOTHIC_14));
   text_layer_set_overflow_mode(s_summary_body, GTextOverflowModeWordWrap);
-  layer_add_child(root, text_layer_get_layer(s_summary_body));
+#ifdef PBL_ROUND
+  text_layer_set_text_alignment(s_summary_body, GTextAlignmentCenter);
+#endif
+
+  scroll_layer_add_child(s_summary_scroll, text_layer_get_layer(s_summary_title));
+  scroll_layer_add_child(s_summary_scroll, text_layer_get_layer(s_summary_body));
+  layer_add_child(root, scroll_layer_get_layer(s_summary_scroll));
+
+#ifdef PBL_ROUND
+  text_layer_enable_screen_text_flow_and_paging(s_summary_body, 8);
+#endif
+
+  GSize body_size = text_layer_get_content_size(s_summary_body);
+  text_layer_set_size(s_summary_body, GSize(bounds.size.w - 20, body_size.h + 10));
+  
+  int content_height = PBL_IF_ROUND_ELSE(55, 45) + body_size.h + PBL_IF_ROUND_ELSE(30, 20);
+  scroll_layer_set_content_size(s_summary_scroll, GSize(bounds.size.w, content_height));
 }
 
 static void summary_window_unload(Window *window) {
   text_layer_destroy(s_summary_body);
   text_layer_destroy(s_summary_title);
+  scroll_layer_destroy(s_summary_scroll);
 }
 
 void window_summary_push(const char *title, const char *body) {
-  if (s_window) window_destroy(s_window);
-  s_window = window_create();
-  window_set_window_handlers(s_window, (WindowHandlers){
+  Window *win = window_create();
+  window_set_window_handlers(win, (WindowHandlers){
     .load = summary_window_load,
     .unload = summary_window_unload,
   });
-  window_set_click_config_provider(s_window, click_config_provider);
-  window_stack_push(s_window, true);
+  window_set_click_config_provider(win, click_config_provider);
+  safe_window_push(win, true);
 }
 
 // ---- Note List Screen ----
@@ -188,11 +231,12 @@ static void notelist_window_load(Window *window) {
   GRect bounds = layer_get_bounds(root);
 
   s_menu_layer = menu_layer_create(GRect(0, 0, bounds.size.w, bounds.size.h));
-  menu_layer_set_callbacks(s_menu_layer, NULL, (MenuLayerCallbacks){
+  static const MenuLayerCallbacks s_menu_callbacks = {
     .get_num_rows = menu_get_num_rows_callback,
     .draw_row = menu_draw_row_callback,
     .select_click = menu_select_callback,
-  });
+  };
+  menu_layer_set_callbacks(s_menu_layer, NULL, s_menu_callbacks);
   menu_layer_set_click_config_onto_window(s_menu_layer, window);
   layer_add_child(root, menu_layer_get_layer(s_menu_layer));
 }
@@ -200,16 +244,26 @@ static void notelist_window_load(Window *window) {
 static void notelist_window_unload(Window *window) {
   menu_layer_destroy(s_menu_layer);
   s_menu_layer = NULL;
+  if (s_window == window) {
+    s_window = s_idle_window;
+  }
+  if (is_current_state_notelist()) {
+    force_state_idle();
+  }
 }
 
 void window_notelist_push(void) {
-  if (s_window) window_destroy(s_window);
-  s_window = window_create();
-  window_set_window_handlers(s_window, (WindowHandlers){
+  Window *win = window_create();
+  window_set_window_handlers(win, (WindowHandlers){
     .load = notelist_window_load,
     .unload = notelist_window_unload,
   });
-  window_stack_push(s_window, true);
+  if (s_window && s_window != s_idle_window) {
+    safe_window_push(win, true);
+  } else {
+    s_window = win;
+    window_stack_push(win, true);
+  }
 }
 
 void refresh_notelist(void) {
@@ -237,14 +291,13 @@ static void fetching_window_unload(Window *window) {
 }
 
 void window_fetching_push(void) {
-  if (s_window) window_destroy(s_window);
-  s_window = window_create();
-  window_set_window_handlers(s_window, (WindowHandlers){
+  Window *win = window_create();
+  window_set_window_handlers(win, (WindowHandlers){
     .load = fetching_window_load,
     .unload = fetching_window_unload,
   });
-  window_set_click_config_provider(s_window, click_config_provider);
-  window_stack_push(s_window, true);
+  window_set_click_config_provider(win, click_config_provider);
+  safe_window_push(win, true);
 }
 
 // ---- Error Screen ----
@@ -267,14 +320,13 @@ static void error_window_unload(Window *window) {
 }
 
 void window_error_push(const char *message) {
-  if (s_window) window_destroy(s_window);
-  s_window = window_create();
-  window_set_window_handlers(s_window, (WindowHandlers){
+  Window *win = window_create();
+  window_set_window_handlers(win, (WindowHandlers){
     .load = error_window_load,
     .unload = error_window_unload,
   });
-  window_set_click_config_provider(s_window, click_config_provider);
-  window_stack_push(s_window, true);
+  window_set_click_config_provider(win, click_config_provider);
+  safe_window_push(win, true);
 }
 
 // ---- Connection Indicator ----

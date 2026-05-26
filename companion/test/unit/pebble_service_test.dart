@@ -205,5 +205,27 @@ void main() {
       expect(sentMessages[0]['TITLE'], equals('Pre-existing Title'));
       expect(sentMessages[0]['BODY'], equals('• Point A\n• Point B'));
     });
+
+    test('should cleanly chunk summaries with multi-byte characters (emojis) without splitting bytes', () async {
+      final bodyWithEmojis = '😊' * 600;
+      aiService.customBody = bodyWithEmojis;
+
+      final watchUpload = {
+        'COMMAND': 1,
+        'RAW_TEXT': 'Trigger emoji chunking',
+        'NOTE_ID': 7777,
+        'MSG_ID': 6,
+        'SESSION_ID': newSessionId,
+      };
+
+      await pebbleService.handleWatchMessage(watchUpload);
+
+      expect(sentMessages.length, greaterThan(3));
+      final chunkMessages = sentMessages.where((m) => m['COMMAND'] == 11).toList();
+      expect(chunkMessages.length, equals(3));
+      expect(chunkMessages[0]['SUMMARY_CHUNK'], equals('😊' * 250));
+      expect(chunkMessages[1]['SUMMARY_CHUNK'], equals('😊' * 250));
+      expect(chunkMessages[2]['SUMMARY_CHUNK'], equals('😊' * 100));
+    });
   });
 }

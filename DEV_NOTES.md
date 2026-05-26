@@ -55,7 +55,9 @@ This meant two critical Pebble features — dictation and vibes — were inacces
    - Declare `extern` in `protocol.h`
    - All files that need access include `protocol.h`
 
-5. **s_window lifecycle:** A single shared `Window *s_window` across `main.c` and `ui.c` works. Each `window_*_push()` function destroys the old window (via `window_destroy(s_window)`) before creating and pushing a new one. `set_state()` no longer calls `window_stack_remove` — the push functions handle removal via `window_destroy`.
+5. **s_window lifecycle & Native Stacking:** To prevent window stack corruption during rapid phone updates, we use a hybrid native stack & transient-swapping model:
+   - **Transient Swapping**: Modal loader and notification states (`LISTENING`, `PROCESSING`, `FETCHING`, `SUMMARY_READY`, `ERROR`) utilize `safe_window_push()`, which pushes the new window first, then removes and destroys the old window (`s_window`) from the stack.
+   - **Hierarchical Stacking**: Transitioning `IDLE -> NOTELIST` pushes `notelist_window` natively on top of `idle_window` without destroying it. Pressing BACK natively pops `notelist_window`, revealing `idle_window` automatically. Upon unload, the notelist window restores `s_window = s_idle_window` and syncs the app state back to `STATE_IDLE`.
 
 6. **MenuLayer click takeover:** `menu_layer_set_click_config_onto_window()` replaces the window's click config provider. So window-level `click_config_provider` is NOT called for MenuLayer windows. The MenuLayer handles its own up/down/select navigation internally.
 
@@ -70,7 +72,6 @@ This meant two critical Pebble features — dictation and vibes — were inacces
 **Known gaps (Phase 1 handoff):**
 - `set_connection_status()` is defined and exported, but no Bluetooth connection callback (`battery_state_service_subscribe` or `connection_service_subscribe`) is registered — the connection indicator never fires.
 - Note list has no delete action — no way to remove notes from the watch.
-- Summary screen uses a fixed-height TextLayer (not ScrollLayer) — long bodies will be clipped rather than scrollable.
 - `dictation_deinit()` is defined in dictation.c but was only recently added to main.c's `deinit()`.
 - No C unit tests exist (requires host-side mocking of Pebble APIs or ARM QEMU).
 

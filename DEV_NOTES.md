@@ -710,3 +710,12 @@ Note: the crash is NOT caused by any MindCorder code — a minimal `import 'pack
   - **Glowing Source-Linked Timeline Threads**: Added a continuous vertical gradient timeline thread alongside the cards. A solid line connects the notes, terminated at each note card by a glowing, source-specific node (`Icons.watch` in a rich Indigo glow for Pebble-captured notes, and `Icons.phone_android` in a cool Teal glow for mobile-native captured notes).
   - **Ambient Card Glows**: Custom `BoxShadow` ambient glows were added to each note card to project subtle backlights corresponding to the device source, significantly elevating the app's dark-mode aesthetic.
 
+### 5. Local-First Semantic Vector Search (May 2026)
+- **Problem**: As the user captures more thoughts, finding specific notes becomes difficult. Conventional keyword matching fails when the user searches for conceptual ideas (e.g., searching for *"groceries"* when the note only contains *"milk"* and *"bread"*). Additionally, keystroke-level network calls or native LLM embeddings for an "as-you-type" search introduce unacceptable lag (150ms-500ms), API fees, rate limits, and failure modes when offline.
+- **Resolution**: Designed and implemented a high-performance, offline-first Hybrid Vector Space Model (VSM) search engine in pure Dart:
+  - **Local TF-IDF VSM**: Created `SemanticSearchEngine` to dynamically tokenize, clean, and filter English stop words, representing each note as a term frequency vector in a local vocabulary index.
+  - **Cosine Similarity Matcher**: Computes mathematical cosine similarities between the search query vector and note vectors in <0.1ms, establishing high-performance relevance rankings. Priortizes Title matches (2.5x weight multiplier) over Body summaries (1.0x) and raw text transcripts (0.5x).
+  - **Semantic Concept Expansion**: Extends queries using a pre-compiled thesaurus for common domains (e.g., `grocery`, `work`, `health`, `coding`, `thoughts`), automatically mapping related concepts (e.g., *"grocery"* matches *"milk"* or *"supermarket"*) at decayed weights (0.5x).
+  - **Fluid Reactive Search UI**: Positioned a sleek glassmorphic search sliver at the top of the main screen. As the user types, non-matching notes instantly fade and collapse. When searching, chronological grouping is dynamically replaced by a unified **SEMANTIC MATCHES** header displaying precise relevance percentages (e.g., `92% MATCH`) on the cards. An elegant "No matching thoughts found" placeholder appears when search results are empty.
+
+

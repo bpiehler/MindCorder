@@ -6,6 +6,7 @@ import '../pebble/pebble_service.dart';
 import 'package:drift/drift.dart' as drift;
 import 'voice_capture_sheet.dart';
 import 'timeline_helper.dart';
+import 'search_helper.dart';
 import 'dart:ui';
 
 class NoteListPage extends StatefulWidget {
@@ -18,6 +19,14 @@ class NoteListPage extends StatefulWidget {
 class _NoteListPageState extends State<NoteListPage> {
   bool _isWatchConnected = false;
   late final Stream<List<Note>> _notesStream;
+  final TextEditingController _searchController = TextEditingController();
+  String _searchQuery = '';
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
 
   @override
   void initState() {
@@ -136,11 +145,86 @@ class _NoteListPageState extends State<NoteListPage> {
             );
           }
 
-          final groups = TimelineCategorizer.groupNotes(notes);
+          // Calculate similarity scores if search query is active
+          List<MapEntry<Note, double>> scoredNotes = [];
+          if (_searchQuery.isNotEmpty) {
+            for (final note in notes) {
+              final similarity = SemanticSearchEngine.computeSimilarity(
+                query: _searchQuery,
+                title: note.summaryTitle ?? '',
+                body: note.summaryBody ?? '',
+                rawText: note.rawText,
+              );
+              if (similarity > 0.0) {
+                scoredNotes.add(MapEntry(note, similarity));
+              }
+            }
+            // Sort by semantic similarity descending
+            scoredNotes.sort((a, b) => b.value.compareTo(a.value));
+          } else {
+            scoredNotes = notes.map((n) => MapEntry(n, 1.0)).toList();
+          }
+
+          final similarityMap = Map.fromEntries(scoredNotes.map((e) => MapEntry(e.key.id, e.value)));
+
+          // Check if searching returned absolutely no matches
+          if (scoredNotes.isEmpty && _searchQuery.isNotEmpty) {
+            return CustomScrollView(
+              physics: const BouncingScrollPhysics(),
+              slivers: [
+                SliverToBoxAdapter(
+                  child: _buildSearchBar(),
+                ),
+                SliverFillRemaining(
+                  hasScrollBody: false,
+                  child: Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(
+                          Icons.search_off_outlined,
+                          size: 64,
+                          color: Colors.blueGrey.withOpacity(0.4),
+                        ),
+                        const SizedBox(height: 16),
+                        const Text(
+                          'No matching thoughts found',
+                          style: TextStyle(color: Colors.blueGrey, fontSize: 16),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          'Try searching for synonyms or related concepts!',
+                          style: TextStyle(
+                            color: Colors.blueGrey.withOpacity(0.6),
+                            fontSize: 12,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            );
+          }
+
+          final List<TimelineGroup> groups;
+          if (_searchQuery.isNotEmpty) {
+            groups = [
+              TimelineGroup(
+                title: 'SEMANTIC MATCHES',
+                notes: scoredNotes.map((e) => e.key).toList(),
+              )
+            ];
+          } else {
+            groups = TimelineCategorizer.groupNotes(notes);
+          }
 
           return CustomScrollView(
             physics: const BouncingScrollPhysics(),
             slivers: [
+              SliverToBoxAdapter(
+                child: _buildSearchBar(),
+              ),
               for (final group in groups) ...[
                 SliverPersistentHeader(
                   pinned: true,
@@ -154,7 +238,15 @@ class _NoteListPageState extends State<NoteListPage> {
                         final note = group.notes[index];
                         final isFirst = index == 0;
                         final isLast = index == group.notes.length - 1;
-                        return _buildTimelineRow(context, note, database, isFirst, isLast);
+                        final similarity = similarityMap[note.id];
+                        return _buildTimelineRow(
+                          context,
+                          note,
+                          database,
+                          isFirst,
+                          isLast,
+                          similarity: similarity,
+                        );
                       },
                       childCount: group.notes.length,
                     ),
@@ -176,7 +268,12 @@ class _NoteListPageState extends State<NoteListPage> {
     );
   }
 
-  Widget _buildNoteCard(BuildContext context, Note note, AppDatabase database) {
+  Widget _buildNoteCard(
+    BuildContext context,
+    Note note,
+    AppDatabase database, {
+    double? similarity,
+  }) {
     final title = note.summaryTitle ?? 'Processing note...';
     final hasFailed = note.processingStatus == 'failed';
     final isProcessing = note.processingStatus == 'processing';
@@ -236,6 +333,25 @@ class _NoteListPageState extends State<NoteListPage> {
                 ),
               ),
               _buildStatusBadge(note.processingStatus),
+              if (_searchQuery.isNotEmpty && similarity != null && similarity > 0.0) ...[
+                const SizedBox(width: 8),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF6366F1).withOpacity(0.15),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: const Color(0xFF6366F1).withOpacity(0.3), width: 1),
+                  ),
+                  child: Text(
+                    '${(similarity * 100).toStringAsFixed(0)}% MATCH',
+                    style: const TextStyle(
+                      color: Color(0xFF818CF8),
+                      fontSize: 9,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+              ],
             ],
           ),
           subtitle: Column(
@@ -414,8 +530,9 @@ class _NoteListPageState extends State<NoteListPage> {
     Note note,
     AppDatabase database,
     bool isFirst,
-    bool isLast,
-  ) {
+    bool isLast, {
+    double? similarity,
+  }) {
     final isWatch = note.watchId != null;
 
     return IntrinsicHeight(
@@ -482,7 +599,12 @@ class _NoteListPageState extends State<NoteListPage> {
           Expanded(
             child: Padding(
               padding: const EdgeInsets.symmetric(vertical: 6),
-              child: _buildNoteCard(context, note, database),
+              child: _buildNoteCard(
+                context,
+                note,
+                database,
+                similarity: similarity,
+              ),
             ),
           ),
         ],
@@ -567,6 +689,70 @@ class _NoteListPageState extends State<NoteListPage> {
           ),
         );
       },
+    );
+  }
+
+  Widget _buildSearchBar() {
+    return Padding(
+      padding: const EdgeInsets.only(left: 16, right: 16, top: 16, bottom: 8),
+      child: Container(
+        decoration: BoxDecoration(
+          color: const Color(0xFF1E293B).withOpacity(0.6),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: Colors.white.withOpacity(0.08),
+            width: 1,
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.2),
+              blurRadius: 10,
+              spreadRadius: 1,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(16),
+          child: BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 8.0, sigmaY: 8.0),
+            child: TextField(
+              controller: _searchController,
+              onChanged: (val) {
+                setState(() {
+                  _searchQuery = val.trim();
+                });
+              },
+              style: const TextStyle(color: Colors.white, fontSize: 14),
+              decoration: InputDecoration(
+                hintText: 'Search thoughts semantically...',
+                hintStyle: TextStyle(
+                  color: Colors.white.withOpacity(0.4),
+                  fontSize: 14,
+                ),
+                prefixIcon: const Icon(
+                  Icons.search,
+                  color: Color(0xFF818CF8),
+                  size: 20,
+                ),
+                suffixIcon: _searchQuery.isNotEmpty
+                    ? IconButton(
+                        icon: const Icon(Icons.clear, color: Colors.blueGrey, size: 18),
+                        onPressed: () {
+                          _searchController.clear();
+                          setState(() {
+                            _searchQuery = '';
+                          });
+                        },
+                      )
+                    : null,
+                border: InputBorder.none,
+                contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              ),
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

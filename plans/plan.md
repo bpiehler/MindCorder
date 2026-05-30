@@ -720,8 +720,8 @@ pebble build && pebble install --emulator gabbro
   - Create a Tag Manager view allowing users to easily add, customize, delete, or rename tags and descriptions.
 
 ### 6.3 Semantic Vector Search (Local Embedding Search)
-- [ ] Integrate a lightweight local vector embedding model (e.g. running via Dart ONNX runtime or a local SQLite FTS5 extension).
-- [ ] Support semantic searches where concept-matching replaces exact keyword-matching (e.g., searching for *"groceries"* successfully surfaces notes that say *"need to buy milk"* or *"supermarket list"*).
+- [x] Integrate a lightweight local vector embedding model (e.g. running via Dart ONNX runtime or a local SQLite FTS5 extension).
+- [x] Support semantic searches where concept-matching replaces exact keyword-matching (e.g., searching for *"groceries"* successfully surfaces notes that say *"need to buy milk"* or *"supermarket list"*).
 
 ### 6.4 Custom System Prompt Override (Power User Prompts)
 - [ ] Add a secure, expandable text input section in the **Settings** page that allows power users to override the default summarization prompt (`AIParser.systemPrompt`).

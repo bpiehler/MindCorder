@@ -57,13 +57,43 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
                   note.isPinned ? Icons.push_pin : Icons.push_pin_outlined,
                   color: note.isPinned ? const Color(0xFF6366F1) : Colors.blueGrey,
                 ),
+                tooltip: note.isPinned ? 'Unpin Note' : 'Pin Note',
                 onPressed: () {
                   database.updateNoteEntry(note.copyWith(isPinned: !note.isPinned));
                   setState(() {});
                 },
               ),
               IconButton(
+                icon: Icon(
+                  note.isArchived ? Icons.unarchive : Icons.archive_outlined,
+                  color: note.isArchived ? const Color(0xFF14B8A6) : Colors.blueGrey,
+                ),
+                tooltip: note.isArchived ? 'Unarchive Note' : 'Archive Note',
+                onPressed: () {
+                  final newArchived = !note.isArchived;
+                  database.updateNoteEntry(note.copyWith(isArchived: newArchived));
+                  
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text(
+                        newArchived 
+                            ? 'Note "${note.summaryTitle ?? "Untitled"}" archived' 
+                            : 'Note "${note.summaryTitle ?? "Untitled"}" restored from archive'
+                      ),
+                      backgroundColor: const Color(0xFF1E293B),
+                    ),
+                  );
+                  
+                  if (newArchived) {
+                    context.pop(); // Pop back to active list
+                  } else {
+                    setState(() {}); // Refresh detailed view state
+                  }
+                },
+              ),
+              IconButton(
                 icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
+                tooltip: 'Delete Note',
                 onPressed: () => _confirmDelete(context, database, note),
               ),
             ],

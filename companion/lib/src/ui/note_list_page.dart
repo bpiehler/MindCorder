@@ -207,10 +207,10 @@ class _NoteListPageState extends State<NoteListPage> {
             );
           }
 
-          final List<TimelineGroup> groups;
+          final List<TimeframeGroup> groups;
           if (_searchQuery.isNotEmpty) {
             groups = [
-              TimelineGroup(
+              TimeframeGroup(
                 title: 'SEMANTIC MATCHES',
                 notes: scoredNotes.map((e) => e.key).toList(),
               )

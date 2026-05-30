@@ -50,6 +50,14 @@ class AppDatabase extends _$AppDatabase {
         .watch();
   }
 
+  Stream<List<Note>> watchEveryNote() {
+    return (select(notes)
+          ..orderBy([
+            (t) => OrderingTerm(expression: t.createdAt, mode: OrderingMode.desc),
+          ]))
+        .watch();
+  }
+
   Future<List<Note>> getAllNotes() {
     return (select(notes)
           ..orderBy([

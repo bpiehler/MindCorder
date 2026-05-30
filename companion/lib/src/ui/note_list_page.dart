@@ -21,6 +21,7 @@ class _NoteListPageState extends State<NoteListPage> {
   late final Stream<List<Note>> _notesStream;
   final TextEditingController _searchController = TextEditingController();
   String _searchQuery = '';
+  final Set<String> _collapsedSections = {'ARCHIVED'};
 
   @override
   void dispose() {
@@ -31,7 +32,7 @@ class _NoteListPageState extends State<NoteListPage> {
   @override
   void initState() {
     super.initState();
-    _notesStream = Provider.of<AppDatabase>(context, listen: false).watchAllNotes();
+    _notesStream = Provider.of<AppDatabase>(context, listen: false).watchEveryNote();
     _checkWatchConnection();
     // Periodically update watch connection status
     Stream.periodic(const Duration(seconds: 4)).listen((_) {
@@ -216,7 +217,20 @@ class _NoteListPageState extends State<NoteListPage> {
               )
             ];
           } else {
-            groups = TimelineCategorizer.groupNotes(notes);
+            final activePinned = notes.where((n) => n.isPinned && !n.isArchived).toList();
+            final activeUnpinned = notes.where((n) => !n.isPinned && !n.isArchived).toList();
+            final archivedNotes = notes.where((n) => n.isArchived).toList();
+
+            groups = [];
+            if (activePinned.isNotEmpty) {
+              groups.add(TimeframeGroup(title: 'PINNED', notes: activePinned));
+            }
+            if (activeUnpinned.isNotEmpty) {
+              groups.addAll(TimelineCategorizer.groupNotes(activeUnpinned));
+            }
+            if (archivedNotes.isNotEmpty) {
+              groups.add(TimeframeGroup(title: 'ARCHIVED', notes: archivedNotes));
+            }
           }
 
           return CustomScrollView(
@@ -228,30 +242,43 @@ class _NoteListPageState extends State<NoteListPage> {
               for (final group in groups) ...[
                 SliverPersistentHeader(
                   pinned: true,
-                  delegate: GlassmorphicHeaderDelegate(title: group.title),
-                ),
-                SliverPadding(
-                  padding: const EdgeInsets.only(left: 12, right: 16, top: 8, bottom: 8),
-                  sliver: SliverList(
-                    delegate: SliverChildBuilderDelegate(
-                      (context, index) {
-                        final note = group.notes[index];
-                        final isFirst = index == 0;
-                        final isLast = index == group.notes.length - 1;
-                        final similarity = similarityMap[note.id];
-                        return _buildTimelineRow(
-                          context,
-                          note,
-                          database,
-                          isFirst,
-                          isLast,
-                          similarity: similarity,
-                        );
-                      },
-                      childCount: group.notes.length,
-                    ),
+                  delegate: GlassmorphicHeaderDelegate(
+                    title: group.title,
+                    isCollapsed: _collapsedSections.contains(group.title),
+                    onTap: () {
+                      setState(() {
+                        if (_collapsedSections.contains(group.title)) {
+                          _collapsedSections.remove(group.title);
+                        } else {
+                          _collapsedSections.add(group.title);
+                        }
+                      });
+                    },
                   ),
                 ),
+                if (!_collapsedSections.contains(group.title))
+                  SliverPadding(
+                    padding: const EdgeInsets.only(left: 12, right: 16, top: 8, bottom: 8),
+                    sliver: SliverList(
+                      delegate: SliverChildBuilderDelegate(
+                        (context, index) {
+                          final note = group.notes[index];
+                          final isFirst = index == 0;
+                          final isLast = index == group.notes.length - 1;
+                          final similarity = similarityMap[note.id];
+                          return _buildTimelineRow(
+                            context,
+                            note,
+                            database,
+                            isFirst,
+                            isLast,
+                            similarity: similarity,
+                          );
+                        },
+                        childCount: group.notes.length,
+                      ),
+                    ),
+                  ),
               ],
               const SliverToBoxAdapter(
                 child: SizedBox(height: 80),
@@ -333,6 +360,25 @@ class _NoteListPageState extends State<NoteListPage> {
                 ),
               ),
               _buildStatusBadge(note.processingStatus),
+              if (note.isArchived) ...[
+                const SizedBox(width: 8),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF14B8A6).withOpacity(0.15),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: const Color(0xFF14B8A6).withOpacity(0.3), width: 1),
+                  ),
+                  child: const Text(
+                    'ARCHIVED',
+                    style: TextStyle(
+                      color: Color(0xFF2DD4BF),
+                      fontSize: 9,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+              ],
               if (_searchQuery.isNotEmpty && similarity != null && similarity > 0.0) ...[
                 const SizedBox(width: 8),
                 Container(
@@ -759,8 +805,14 @@ class _NoteListPageState extends State<NoteListPage> {
 
 class GlassmorphicHeaderDelegate extends SliverPersistentHeaderDelegate {
   final String title;
+  final bool isCollapsed;
+  final VoidCallback onTap;
 
-  GlassmorphicHeaderDelegate({required this.title});
+  GlassmorphicHeaderDelegate({
+    required this.title,
+    required this.isCollapsed,
+    required this.onTap,
+  });
 
   @override
   double get minExtent => 38.0;
@@ -770,33 +822,47 @@ class GlassmorphicHeaderDelegate extends SliverPersistentHeaderDelegate {
 
   @override
   Widget build(BuildContext context, double shrinkOffset, bool overlapsContent) {
-    return ClipRect(
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
-        child: Container(
-          height: 38.0,
-          alignment: Alignment.centerLeft,
-          padding: const EdgeInsets.symmetric(horizontal: 20),
-          decoration: BoxDecoration(
-            color: const Color(0xDD0F172A),
-            border: Border(
-              bottom: BorderSide(
-                color: Colors.white.withOpacity(0.06),
-                width: 1,
-              ),
-              top: BorderSide(
-                color: Colors.white.withOpacity(0.04),
-                width: 1,
+    return GestureDetector(
+      onTap: onTap,
+      behavior: HitTestBehavior.opaque,
+      child: ClipRect(
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+          child: Container(
+            height: 38.0,
+            alignment: Alignment.centerLeft,
+            padding: const EdgeInsets.symmetric(horizontal: 20),
+            decoration: BoxDecoration(
+              color: const Color(0xDD0F172A),
+              border: Border(
+                bottom: BorderSide(
+                  color: Colors.white.withOpacity(0.06),
+                  width: 1,
+                ),
+                top: BorderSide(
+                  color: Colors.white.withOpacity(0.04),
+                  width: 1,
+                ),
               ),
             ),
-          ),
-          child: Text(
-            title,
-            style: const TextStyle(
-              color: Color(0xFF818CF8),
-              fontSize: 11,
-              fontWeight: FontWeight.bold,
-              letterSpacing: 1.0,
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  title,
+                  style: const TextStyle(
+                    color: Color(0xFF818CF8),
+                    fontSize: 11,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 1.0,
+                  ),
+                ),
+                Icon(
+                  isCollapsed ? Icons.keyboard_arrow_right : Icons.keyboard_arrow_down,
+                  color: const Color(0xFF818CF8),
+                  size: 16,
+                ),
+              ],
             ),
           ),
         ),
@@ -806,6 +872,8 @@ class GlassmorphicHeaderDelegate extends SliverPersistentHeaderDelegate {
 
   @override
   bool shouldRebuild(covariant GlassmorphicHeaderDelegate oldDelegate) {
-    return oldDelegate.title != title;
+    return oldDelegate.title != title ||
+        oldDelegate.isCollapsed != isCollapsed ||
+        oldDelegate.onTap != onTap;
   }
 }

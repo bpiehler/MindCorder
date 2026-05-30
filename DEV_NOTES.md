@@ -718,4 +718,13 @@ Note: the crash is NOT caused by any MindCorder code — a minimal `import 'pack
   - **Semantic Concept Expansion**: Extends queries using a pre-compiled thesaurus for common domains (e.g., `grocery`, `work`, `health`, `coding`, `thoughts`), automatically mapping related concepts (e.g., *"grocery"* matches *"milk"* or *"supermarket"*) at decayed weights (0.5x).
   - **Fluid Reactive Search UI**: Positioned a sleek glassmorphic search sliver at the top of the main screen. As the user types, non-matching notes instantly fade and collapse. When searching, chronological grouping is dynamically replaced by a unified **SEMANTIC MATCHES** header displaying precise relevance percentages (e.g., `92% MATCH`) on the cards. An elegant "No matching thoughts found" placeholder appears when search results are empty.
 
+### 6. Interactive Collapsible Section Headers, Pinned Section, and Integrated Archives (May 2026)
+- **Problem**: As notes populate, the timeline scroll length increases. Users want to be able to collapse sections to navigate quickly. Furthermore, pinned notes pinned only within their individual chronological groups (scattered throughout the list), and there was no way to browse archived notes directly on the main feed.
+- **Resolution**: Upgraded `NoteListPage` to a fully dynamic, gesture-interactive sectional timeline list:
+  - **Collapsible Section Gestures**: Updated `GlassmorphicHeaderDelegate` to detect taps, toggling the collapse state of any section dynamically. A rotating Material arrow icon (`keyboard_arrow_right` vs `keyboard_arrow_down`) provides premium visual guidance.
+  - **Zero-Paint Collapsing Overhead**: When a section is collapsed, its child note card slivers are omitted entirely from the scroll view build cycle, eliminating rendering overhead.
+  - **Top-Level Pinned Group**: Pinned active notes are automatically extracted into a dedicated **"PINNED"** section pinned at the very top of the feed, ensuring instant high-priority access.
+  - **Integrated Archived Section**: Staged a collapsible **"ARCHIVED"** section at the very bottom of the feed (collapsed by default, hidden completely if empty), allowing users to browse their archives without leaving the home screen. Swiping a card left automatically transitions it from chronological groups down into the bottom archives.
+
+
 

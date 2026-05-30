@@ -22,10 +22,12 @@ class _NoteListPageState extends State<NoteListPage> {
   final TextEditingController _searchController = TextEditingController();
   String _searchQuery = '';
   final Set<String> _collapsedSections = {'ARCHIVED'};
+  final FocusNode _searchFocusNode = FocusNode();
 
   @override
   void dispose() {
     _searchController.dispose();
+    _searchFocusNode.dispose();
     super.dispose();
   }
 
@@ -104,9 +106,12 @@ class _NoteListPageState extends State<NoteListPage> {
         actions: [
           IconButton(
             icon: const Icon(Icons.settings, color: Colors.blueGrey),
-            onPressed: () {
-              FocusScope.of(context).unfocus();
-              context.push('/settings');
+            onPressed: () async {
+              _searchFocusNode.unfocus();
+              await context.push('/settings');
+              if (mounted) {
+                _searchFocusNode.unfocus();
+              }
             },
           ),
         ],
@@ -294,7 +299,7 @@ class _NoteListPageState extends State<NoteListPage> {
         backgroundColor: const Color(0xFF6366F1), // Indigo accent
         child: const Icon(Icons.add, color: Colors.white),
         onPressed: () {
-          FocusScope.of(context).unfocus();
+          _searchFocusNode.unfocus();
           _showAddOptionsSheet(context);
         },
       ),
@@ -450,10 +455,13 @@ class _NoteListPageState extends State<NoteListPage> {
               ),
             ],
           ),
-          onTap: () {
+          onTap: () async {
             if (!isProcessing) {
-              FocusScope.of(context).unfocus();
-              context.push('/detail/${note.id}');
+              _searchFocusNode.unfocus();
+              await context.push('/detail/${note.id}');
+              if (mounted) {
+                _searchFocusNode.unfocus();
+              }
             }
           },
         ),
@@ -771,6 +779,7 @@ class _NoteListPageState extends State<NoteListPage> {
             filter: ImageFilter.blur(sigmaX: 8.0, sigmaY: 8.0),
             child: TextField(
               controller: _searchController,
+              focusNode: _searchFocusNode,
               onChanged: (val) {
                 setState(() {
                   _searchQuery = val.trim();

@@ -705,9 +705,9 @@ pebble build && pebble install --emulator gabbro
 **Goal:** Elevate MindCorder from a chronological feed into a premium, organized, and custom "second brain" using advanced AI orchestration and modern gesture-driven Flutter layouts.
 
 ### 6.1 Dynamic Timeline & Smart Grouping (UX/UI)
-- [ ] **Chronological Epoch Grouping**: Group notes dynamically by timeframes: "Today", "Yesterday", "This Week", "Last Week", "This Month", and "Older" (collapsing into Month/Year sections).
-- [ ] **Glassmorphic Floating Headers**: Implement floated sticky timeline section headers utilizing Flutter's `BackdropFilter` and elegant translucent shadows, snapping into place as the user scrolls.
-- [ ] **Interactive Vertical Thread**: Render a glowing vertical thread linking note cards, using physics-based spring animations (`flutter_physics`) to expand/collapse timeline groupings.
+- [x] **Chronological Epoch Grouping**: Group notes dynamically by timeframes: "Today", "Yesterday", "This Week", "Last Week", "This Month", and "Older" (collapsing into Month/Year sections).
+- [x] **Glassmorphic Floating Headers**: Implement floated sticky timeline section headers utilizing Flutter's `BackdropFilter` and elegant translucent shadows, snapping into place as the user scrolls.
+- [x] **Interactive Vertical Thread**: Render a glowing vertical thread linking note cards, using physics-based spring animations (`flutter_physics`) to expand/collapse timeline groupings.
 
 ### 6.2 AI Auto-Tagging & Taxonomy (Advanced AI)
 - [ ] **Approach A (Descriptor-Based Auto-Tagging - Recommended)**:

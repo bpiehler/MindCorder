@@ -701,3 +701,12 @@ Note: the crash is NOT caused by any MindCorder code — a minimal `import 'pack
 - **Bypassing the Restriction**:
   - *Option A (Nano)*: Keep the companion app open and visible on screen during dictation.
   - *Option B (Cloud BYOK)*: Configure a Cloud API key (OpenAI/Anthropic/Gemini Cloud) in settings. PebbleService will instantly fall back to the cloud model in less than 3 seconds when in the background.
+
+### 4. Dynamic Timeline Grouping & Premium Visual Theme (May 2026)
+- **Problem**: The chronological list of notes was flat and lacked clear structure, making it difficult to locate notes captured across different days or weeks. Furthermore, the UI felt basic and lacked a premium, modern aesthetic, which did not align with MindCorder's focus on high-fidelity user experiences.
+- **Resolution**: Designed and implemented a dynamic chronological timeline groupings engine coupled with a premium glassmorphic visual theme:
+  - **Chronological Epoch Grouping**: Implemented `TimelineHelper` to automatically classify notes based on their `createdAt` timestamps into standard epochs: `TODAY`, `YESTERDAY`, `THIS_WEEK`, `THIS_MONTH`, and dynamic month-year buckets for older notes.
+  - **Glassmorphic Sticky Headers**: Replaced the flat ListView with a custom `CustomScrollView` and persistent slivers. Developed a translucent `GlassmorphicHeaderDelegate` utilizing Flutter's `BackdropFilter` (for `sigmaX: 10.0, sigmaY: 10.0` blur) and subtle borders. These section headers stick to the top of the scroll viewport during scroll, providing a sleek overlay.
+  - **Glowing Source-Linked Timeline Threads**: Added a continuous vertical gradient timeline thread alongside the cards. A solid line connects the notes, terminated at each note card by a glowing, source-specific node (`Icons.watch` in a rich Indigo glow for Pebble-captured notes, and `Icons.phone_android` in a cool Teal glow for mobile-native captured notes).
+  - **Ambient Card Glows**: Custom `BoxShadow` ambient glows were added to each note card to project subtle backlights corresponding to the device source, significantly elevating the app's dark-mode aesthetic.
+

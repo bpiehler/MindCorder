@@ -218,9 +218,14 @@ class _VoiceCaptureSheetState extends State<VoiceCaptureSheet> with SingleTicker
               height: 300,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                color: const Color(0xFF6366F1).withOpacity(0.08),
-                blurRadius: 100,
-              ) as Decoration?,
+                boxShadow: [
+                  BoxShadow(
+                    color: const Color(0xFF6366F1).withOpacity(0.08),
+                    blurRadius: 100,
+                    spreadRadius: 50,
+                  ),
+                ],
+              ),
             ),
           ),
           Positioned(
@@ -231,9 +236,14 @@ class _VoiceCaptureSheetState extends State<VoiceCaptureSheet> with SingleTicker
               height: 250,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                color: const Color(0xFF818CF8).withOpacity(0.08),
-                blurRadius: 100,
-              ) as Decoration?,
+                boxShadow: [
+                  BoxShadow(
+                    color: const Color(0xFF818CF8).withOpacity(0.08),
+                    blurRadius: 100,
+                    spreadRadius: 50,
+                  ),
+                ],
+              ),
             ),
           ),
 

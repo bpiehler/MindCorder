@@ -5,6 +5,8 @@ import '../data/database.dart';
 import '../pebble/pebble_service.dart';
 import 'package:drift/drift.dart' as drift;
 import 'voice_capture_sheet.dart';
+import 'timeline_helper.dart';
+import 'dart:ui';
 
 class NoteListPage extends StatefulWidget {
   const NoteListPage({super.key});
@@ -134,13 +136,35 @@ class _NoteListPageState extends State<NoteListPage> {
             );
           }
 
-          return ListView.builder(
-            padding: const EdgeInsets.all(16),
-            itemCount: notes.length,
-            itemBuilder: (context, index) {
-              final note = notes[index];
-              return _buildNoteCard(context, note, database);
-            },
+          final groups = TimelineCategorizer.groupNotes(notes);
+
+          return CustomScrollView(
+            physics: const BouncingScrollPhysics(),
+            slivers: [
+              for (final group in groups) ...[
+                SliverPersistentHeader(
+                  pinned: true,
+                  delegate: GlassmorphicHeaderDelegate(title: group.title),
+                ),
+                SliverPadding(
+                  padding: const EdgeInsets.only(left: 12, right: 16, top: 8, bottom: 8),
+                  sliver: SliverList(
+                    delegate: SliverChildBuilderDelegate(
+                      (context, index) {
+                        final note = group.notes[index];
+                        final isFirst = index == 0;
+                        final isLast = index == group.notes.length - 1;
+                        return _buildTimelineRow(context, note, database, isFirst, isLast);
+                      },
+                      childCount: group.notes.length,
+                    ),
+                  ),
+                ),
+              ],
+              const SliverToBoxAdapter(
+                child: SizedBox(height: 80),
+              ),
+            ],
           );
         },
       ),
@@ -160,7 +184,6 @@ class _NoteListPageState extends State<NoteListPage> {
     return Dismissible(
       key: Key(note.id.toString()),
       background: Container(
-        margin: const EdgeInsets.only(bottom: 12),
         decoration: BoxDecoration(
           color: Colors.redAccent.withOpacity(0.8),
           borderRadius: BorderRadius.circular(12),
@@ -191,7 +214,7 @@ class _NoteListPageState extends State<NoteListPage> {
           ),
         ),
         elevation: 2,
-        margin: const EdgeInsets.only(bottom: 12),
+        margin: EdgeInsets.zero,
         child: ListTile(
           contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
           title: Row(
@@ -386,6 +409,87 @@ class _NoteListPageState extends State<NoteListPage> {
     );
   }
 
+  Widget _buildTimelineRow(
+    BuildContext context,
+    Note note,
+    AppDatabase database,
+    bool isFirst,
+    bool isLast,
+  ) {
+    final isWatch = note.watchId != null;
+
+    return IntrinsicHeight(
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // Vertical thread segment
+          SizedBox(
+            width: 48,
+            child: Stack(
+              alignment: Alignment.center,
+              children: [
+                Positioned(
+                  top: isFirst ? 24 : 0,
+                  bottom: isLast ? 24 : 0,
+                  child: Container(
+                    width: 2,
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [
+                          isWatch ? const Color(0xFF6366F1) : const Color(0xFF14B8A6),
+                          isWatch ? const Color(0xFF818CF8) : const Color(0xFF2DD4BF),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+                Align(
+                  alignment: Alignment.center,
+                  child: Container(
+                    width: 28,
+                    height: 28,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: isWatch
+                          ? const Color(0xFF6366F1).withOpacity(0.15)
+                          : const Color(0xFF14B8A6).withOpacity(0.15),
+                      border: Border.all(
+                        color: isWatch ? const Color(0xFF6366F1) : const Color(0xFF14B8A6),
+                        width: 1.5,
+                      ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: isWatch
+                              ? const Color(0xFF6366F1).withOpacity(0.3)
+                              : const Color(0xFF14B8A6).withOpacity(0.3),
+                          blurRadius: 4,
+                          spreadRadius: 1,
+                        ),
+                      ],
+                    ),
+                    child: Icon(
+                      isWatch ? Icons.watch : Icons.phone_android,
+                      color: isWatch ? const Color(0xFF818CF8) : const Color(0xFF2DD4BF),
+                      size: 13,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Expanded(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 6),
+              child: _buildNoteCard(context, note, database),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   void _showAddOptionsSheet(BuildContext context) {
     showModalBottomSheet<void>(
       context: context,
@@ -464,5 +568,58 @@ class _NoteListPageState extends State<NoteListPage> {
         );
       },
     );
+  }
+}
+
+class GlassmorphicHeaderDelegate extends SliverPersistentHeaderDelegate {
+  final String title;
+
+  GlassmorphicHeaderDelegate({required this.title});
+
+  @override
+  double get minExtent => 38.0;
+
+  @override
+  double get maxExtent => 38.0;
+
+  @override
+  Widget build(BuildContext context, double shrinkOffset, bool overlapsContent) {
+    return ClipRect(
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+        child: Container(
+          height: 38.0,
+          alignment: Alignment.centerLeft,
+          padding: const EdgeInsets.symmetric(horizontal: 20),
+          decoration: BoxDecoration(
+            color: const Color(0xDD0F172A),
+            border: Border(
+              bottom: BorderSide(
+                color: Colors.white.withOpacity(0.06),
+                width: 1,
+              ),
+              top: BorderSide(
+                color: Colors.white.withOpacity(0.04),
+                width: 1,
+              ),
+            ),
+          ),
+          child: Text(
+            title,
+            style: const TextStyle(
+              color: Color(0xFF818CF8),
+              fontSize: 11,
+              fontWeight: FontWeight.bold,
+              letterSpacing: 1.0,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  @override
+  bool shouldRebuild(covariant GlassmorphicHeaderDelegate oldDelegate) {
+    return oldDelegate.title != title;
   }
 }

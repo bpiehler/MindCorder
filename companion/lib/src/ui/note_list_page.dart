@@ -104,7 +104,10 @@ class _NoteListPageState extends State<NoteListPage> {
         actions: [
           IconButton(
             icon: const Icon(Icons.settings, color: Colors.blueGrey),
-            onPressed: () => context.push('/settings'),
+            onPressed: () {
+              FocusScope.of(context).unfocus();
+              context.push('/settings');
+            },
           ),
         ],
       ),
@@ -290,7 +293,10 @@ class _NoteListPageState extends State<NoteListPage> {
       floatingActionButton: FloatingActionButton(
         backgroundColor: const Color(0xFF6366F1), // Indigo accent
         child: const Icon(Icons.add, color: Colors.white),
-        onPressed: () => _showAddOptionsSheet(context),
+        onPressed: () {
+          FocusScope.of(context).unfocus();
+          _showAddOptionsSheet(context);
+        },
       ),
     );
   }
@@ -446,6 +452,7 @@ class _NoteListPageState extends State<NoteListPage> {
           ),
           onTap: () {
             if (!isProcessing) {
+              FocusScope.of(context).unfocus();
               context.push('/detail/${note.id}');
             }
           },

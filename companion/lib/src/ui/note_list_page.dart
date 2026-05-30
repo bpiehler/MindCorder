@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 import '../data/database.dart';
 import '../pebble/pebble_service.dart';
 import 'package:drift/drift.dart' as drift;
+import 'voice_capture_sheet.dart';
 
 class NoteListPage extends StatefulWidget {
   const NoteListPage({super.key});
@@ -146,7 +147,7 @@ class _NoteListPageState extends State<NoteListPage> {
       floatingActionButton: FloatingActionButton(
         backgroundColor: const Color(0xFF6366F1), // Indigo accent
         child: const Icon(Icons.add, color: Colors.white),
-        onPressed: () => _showAddNoteDialog(context, database, pebbleService),
+        onPressed: () => _showAddOptionsSheet(context),
       ),
     );
   }
@@ -380,6 +381,86 @@ class _NoteListPageState extends State<NoteListPage> {
               },
             ),
           ],
+        );
+      },
+    );
+  }
+
+  void _showAddOptionsSheet(BuildContext context) {
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: const Color(0xFF1E293B), // Dark slate
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.only(
+          topLeft: Radius.circular(20),
+          topRight: Radius.circular(20),
+        ),
+      ),
+      builder: (context) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const SizedBox(height: 8),
+              Center(
+                child: Container(
+                  width: 36,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: Colors.blueGrey.withOpacity(0.3),
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 20),
+              const Text(
+                'Capture Thought',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 16,
+                  letterSpacing: 0.2,
+                ),
+              ),
+              const SizedBox(height: 16),
+              ListTile(
+                leading: Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF6366F1).withOpacity(0.15),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(Icons.mic, color: Color(0xFF6366F1)),
+                ),
+                title: const Text('Record Voice Memo', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                subtitle: const Text('Dictate and translate audio stream in real-time', style: TextStyle(color: Colors.blueGrey, fontSize: 12)),
+                onTap: () {
+                  Navigator.pop(context);
+                  VoiceCaptureSheet.show(context);
+                },
+              ),
+              const Divider(color: Color(0xFF334155), indent: 16, endIndent: 16),
+              ListTile(
+                leading: Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: Colors.teal.withOpacity(0.15),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(Icons.edit, color: Colors.tealAccent),
+                ),
+                title: const Text('Write Text Memo', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                subtitle: const Text('Type or paste custom transcript manually', style: TextStyle(color: Colors.blueGrey, fontSize: 12)),
+                onTap: () {
+                  Navigator.pop(context);
+                  final database = Provider.of<AppDatabase>(context, listen: false);
+                  final pebbleService = Provider.of<PebbleService>(context, listen: false);
+                  _showAddNoteDialog(context, database, pebbleService);
+                },
+              ),
+              const SizedBox(height: 20),
+            ],
+          ),
         );
       },
     );

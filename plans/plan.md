@@ -684,19 +684,19 @@ pebble build && pebble install --emulator gabbro
 **Goal:** Allow users to capture streams of consciousness directly on their smartphone using a native voice recording sheet, bypassing the watch if needed.
 
 ### 5.1 UI/UX Expansion
-- [ ] Upgrade the Floating Action Button (FAB) on `NoteListPage` to an Expandable FAB or Speed Dial with two distinct actions:
+- [x] Upgrade the Floating Action Button (FAB) on `NoteListPage` to an Expandable FAB or Speed Dial with two distinct actions:
   - **Text Memo**: Triggers the current manual text transcript dialog (formerly the simulator).
   - **Voice Memo**: Triggers an interactive full-screen audio recording sheet.
-- [ ] Implement the Voice Recording Sheet:
+- [x] Implement the Voice Recording Sheet:
   - Real-time wave/pulse micro-animations matching decibel levels of spoken input.
   - Real-time text transcription rendering on screen.
   - Action buttons: "Pause", "Resume", "Cancel", and "Done" (which commits the note).
 
 ### 5.2 Speech-to-Text Integration
-- [ ] Add `speech_to_text` package to `pubspec.yaml`.
-- [ ] Declare Android microphone permissions (`RECORD_AUDIO`) in `AndroidManifest.xml` and request them dynamically at runtime using `permission_handler`.
-- [ ] Implement `PhoneSpeechService` wrapping the native OS Google Speech-to-Text engine.
-- [ ] Route the final phone-side transcription payload directly into the unified `AIServiceRouter` pipeline, creating a new Drift DB note labeled with the source `"phone_voice"`.
+- [x] Add `speech_to_text` package to `pubspec.yaml`.
+- [x] Declare Android microphone permissions (`RECORD_AUDIO`) in `AndroidManifest.xml` and request them dynamically at runtime using `permission_handler`.
+- [x] Implement `PhoneSpeechService` wrapping the native OS Google Speech-to-Text engine.
+- [x] Route the final phone-side transcription payload directly into the unified `AIServiceRouter` pipeline, creating a new Drift DB note.
 
 ---
 

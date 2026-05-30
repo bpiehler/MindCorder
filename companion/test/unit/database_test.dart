@@ -35,6 +35,22 @@ void main() {
       expect(noteByWatch!.id, equals(id));
     });
 
+    test('should insert and fetch a phone-captured note with null watchId', () async {
+      final companion = NotesCompanion.insert(
+        watchId: const drift.Value(null),
+        rawText: 'This is raw text from native mobile voice capture',
+        processingStatus: const drift.Value('completed'),
+      );
+
+      final id = await database.insertNote(companion);
+      expect(id, greaterThan(0));
+
+      final note = await database.getNoteById(id);
+      expect(note, isNotNull);
+      expect(note!.rawText, equals('This is raw text from native mobile voice capture'));
+      expect(note.watchId, isNull);
+    });
+
     test('should sort all notes correctly (pinned first, then date descending)', () async {
       // 1. Note at t=100 (Unpinned)
       await database.insertNote(NotesCompanion.insert(

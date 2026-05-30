@@ -510,7 +510,7 @@ pebble logs --emulator gabbro
 - [ ] Phone disconnected during fetch → cached body or "Phone not connected"
 - [ ] Gemini Nano failure → auto-retry with cloud
 - [ ] Chunk timeout → "Transfer failed — tap to retry"
-- [ ] **Background-to-Foreground Self-Healing Summarization**: If a dictation fails background summarization (due to Gemini Nano foreground restrictions) and no cloud API key is configured, mark the note status as `pending_foreground` (rather than just generic `failed`). The next time the user launches/opens the companion app UI, the app will scan the DB, detect any `pending_foreground` notes, and automatically run the local Gemini Nano on them in the foreground, updating their summaries transparently.
+- [x] **Background-to-Foreground Self-Healing Summarization**: If a dictation fails background summarization (due to Gemini Nano foreground restrictions) and no cloud API key is configured, mark the note status as `pending_foreground` (rather than just generic `failed`). The next time the user launches/opens the companion app UI, the app will scan the DB, detect any `pending_foreground` notes, and automatically run the local Gemini Nano on them in the foreground, updating their summaries transparently.
 
 ### 4.2 Performance
 - [ ] Debounce button presses (300ms debounce window)

@@ -283,6 +283,11 @@ class _NoteListPageState extends State<NoteListPage> {
         label = 'FAILED';
         icon = Icons.error_outline;
         break;
+      case 'pending_foreground':
+        color = Colors.amber;
+        label = 'QUEUED FOR APP';
+        icon = Icons.hourglass_empty;
+        break;
       case 'completed':
       default:
         return const SizedBox.shrink();

@@ -1,12 +1,13 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/services.dart';
+import 'package:flutter/widgets.dart';
 import 'package:drift/drift.dart';
 import '../data/database.dart';
 import '../ai/ai_service.dart';
 import '../ai/parser.dart';
 
-class PebbleService {
+class PebbleService with WidgetsBindingObserver {
   static const _methodChannel = MethodChannel('mindcorder/pebble_methods');
   static const _eventChannel = EventChannel('mindcorder/pebble_events');
 
@@ -26,6 +27,7 @@ class PebbleService {
 
   /// Starts listening to Pebble watch messages.
   void start() {
+    WidgetsBinding.instance.addObserver(this);
     _eventSubscription = _eventChannel.receiveBroadcastStream().listen(
       (event) {
         if (event is Map) {
@@ -41,6 +43,7 @@ class PebbleService {
 
   /// Stops listening to watch messages.
   void stop() {
+    WidgetsBinding.instance.removeObserver(this);
     _eventSubscription?.cancel();
   }
 
@@ -166,14 +169,16 @@ class PebbleService {
       
       String errorTitle = 'AI Error';
       String errorBody = 'Summarization failed: $e';
+      bool isBgError = false;
       
       if (e.toString().contains('Background usage is blocked') || 
           e.toString().contains('ErrorCode 30')) {
         errorTitle = 'BG Blocked';
         errorBody = 'Local Gemini Nano cannot run in the background. '
-            'Please open the companion app on your phone to keep it in the foreground, '
+            'Please open the companion app on your phone to kick off summarization, '
             'or configure a Cloud API Key (OpenAI, Anthropic, or Gemini Cloud) in Settings '
             'for seamless background processing!';
+        isBgError = true;
       } else if (e.toString().contains('TimeoutException') || 
                  e.toString().contains('timed out')) {
         errorTitle = 'Timeout';
@@ -181,11 +186,11 @@ class PebbleService {
             'Please try again, or configure a Cloud API Key in Settings for faster responses!';
       }
       
-      // Update DB to failed
+      // Update DB
       final originalNote = await database.getNoteById(dbId);
       if (originalNote != null) {
         await database.updateNoteEntry(originalNote.copyWith(
-          processingStatus: 'failed',
+          processingStatus: isBgError ? 'pending_foreground' : 'failed',
           summaryTitle: Value(errorTitle),
           summaryBody: Value(errorBody),
           bodyPlainText: Value(errorBody),
@@ -204,6 +209,119 @@ class PebbleService {
           'MSG_ID': _outgoingMsgId++,
         });
       }
+    }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      print("App resumed: processing pending foreground notes");
+      _processPendingForegroundNotes();
+    }
+  }
+
+  bool _isProcessingPending = false;
+
+  Future<void> _processPendingForegroundNotes() async {
+    if (_isProcessingPending) return;
+    _isProcessingPending = true;
+
+    try {
+      final pendingNotes = await (database.select(database.notes)
+            ..where((t) => t.processingStatus.equals('pending_foreground')))
+          .get();
+
+      if (pendingNotes.isEmpty) return;
+
+      print("Found ${pendingNotes.length} pending foreground notes to summarize");
+
+      for (final note in pendingNotes) {
+        final currentNote = await database.getNoteById(note.id);
+        if (currentNote == null || currentNote.processingStatus != 'pending_foreground') {
+          continue;
+        }
+
+        await database.updateNoteEntry(currentNote.copyWith(
+          processingStatus: 'processing',
+        ));
+
+        try {
+          print("Summarizing note ${note.id} in foreground...");
+          final result = await aiService.summarize(note.rawText);
+          final plainTextBody = AIParser.convertMarkdownToPlainText(result.body);
+
+          await database.updateNoteEntry(currentNote.copyWith(
+            summaryTitle: Value(result.title),
+            summaryBody: Value(result.body),
+            bodyPlainText: Value(plainTextBody),
+            aiProvider: Value(result.provider),
+            processingStatus: 'completed',
+          ));
+
+          print("Successfully summarized note ${note.id} in foreground!");
+
+          if (note.watchId != null) {
+            await _sendSummaryToWatch(result.title, plainTextBody);
+          }
+        } catch (e) {
+          print("Foreground summarization failed for note ${note.id}: $e");
+          
+          final isBgError = e.toString().contains('Background usage is blocked') || 
+                            e.toString().contains('ErrorCode 30');
+          
+          await database.updateNoteEntry(currentNote.copyWith(
+            processingStatus: isBgError ? 'pending_foreground' : 'failed',
+            summaryTitle: Value(isBgError ? 'BG Blocked' : 'AI Error'),
+            summaryBody: Value(isBgError ? 'Local Gemini Nano cannot run in the background.' : 'Summarization failed: $e'),
+            bodyPlainText: Value(isBgError ? 'Local Gemini Nano cannot run in the background.' : 'Summarization failed: $e'),
+          ));
+        }
+      }
+    } finally {
+      _isProcessingPending = false;
+    }
+  }
+
+  Future<void> retrySummarization(int noteId) async {
+    final note = await database.getNoteById(noteId);
+    if (note == null) return;
+
+    await database.updateNoteEntry(note.copyWith(
+      processingStatus: 'processing',
+    ));
+
+    try {
+      print("Retrying summarization for note $noteId...");
+      final result = await aiService.summarize(note.rawText);
+      final plainTextBody = AIParser.convertMarkdownToPlainText(result.body);
+
+      await database.updateNoteEntry(note.copyWith(
+        summaryTitle: Value(result.title),
+        summaryBody: Value(result.body),
+        bodyPlainText: Value(plainTextBody),
+        aiProvider: Value(result.provider),
+        processingStatus: 'completed',
+      ));
+
+      print("Successfully retried summarization for note $noteId!");
+
+      if (note.watchId != null) {
+        await _sendSummaryToWatch(result.title, plainTextBody);
+      }
+    } catch (e) {
+      print("Retry summarization failed for note $noteId: $e");
+      
+      final isBgError = e.toString().contains('Background usage is blocked') || 
+                        e.toString().contains('ErrorCode 30');
+      
+      await database.updateNoteEntry(note.copyWith(
+        processingStatus: isBgError ? 'pending_foreground' : 'failed',
+        summaryTitle: Value(isBgError ? 'BG Blocked' : 'AI Error'),
+        summaryBody: Value(isBgError ? 'Local Gemini Nano cannot run in the background.' : 'Summarization failed: $e'),
+        bodyPlainText: Value(isBgError ? 'Local Gemini Nano cannot run in the background.' : 'Summarization failed: $e'),
+      ));
+      
+      rethrow;
     }
   }
 

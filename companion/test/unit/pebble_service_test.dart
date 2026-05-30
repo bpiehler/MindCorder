@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:flutter/services.dart';
+import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:drift/native.dart';
 import 'package:drift/drift.dart' as drift;
@@ -9,6 +10,7 @@ import 'package:mindcorder_app/src/pebble/pebble_service.dart';
 
 class MockAIService implements AIService {
   bool failNext = false;
+  bool failWithBgBlock = false;
   String customBody = '- Mock bullet 1\n- Mock bullet 2';
 
   @override
@@ -18,6 +20,9 @@ class MockAIService implements AIService {
   Future<SummaryResult> summarize(String rawText) async {
     if (failNext) {
       throw Exception("AI Model Error");
+    }
+    if (failWithBgBlock) {
+      throw Exception("Background usage is blocked. Please use the API when your app is in the foreground instead.");
     }
     return SummaryResult(
       title: 'Mock Summary',
@@ -226,6 +231,49 @@ void main() {
       expect(chunkMessages[0]['SUMMARY_CHUNK'], equals('😊' * 250));
       expect(chunkMessages[1]['SUMMARY_CHUNK'], equals('😊' * 250));
       expect(chunkMessages[2]['SUMMARY_CHUNK'], equals('😊' * 100));
+    });
+
+    test('should mark note as pending_foreground when background usage block is thrown', () async {
+      aiService.failWithBgBlock = true;
+
+      final watchUpload = {
+        'COMMAND': 1,
+        'RAW_TEXT': 'Background blocked transcript',
+        'NOTE_ID': 4444,
+        'MSG_ID': 7,
+        'SESSION_ID': newSessionId,
+      };
+
+      await pebbleService.handleWatchMessage(watchUpload);
+
+      final notes = await database.getAllNotes();
+      expect(notes.length, equals(1));
+      expect(notes.first.processingStatus, equals('pending_foreground'));
+      expect(notes.first.summaryTitle, equals('BG Blocked'));
+    });
+
+    test('should resume summarization on pending_foreground notes when resumed', () async {
+      await database.insertNote(NotesCompanion.insert(
+        watchId: const drift.Value(6666),
+        rawText: 'Pending foreground resume transcript',
+        summaryTitle: const drift.Value('BG Blocked'),
+        processingStatus: const drift.Value('pending_foreground'),
+      ));
+
+      sentMessages.clear();
+
+      pebbleService.didChangeAppLifecycleState(AppLifecycleState.resumed);
+
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      final notes = await database.getAllNotes();
+      expect(notes.length, equals(1));
+      expect(notes.first.processingStatus, equals('completed'));
+      expect(notes.first.summaryTitle, equals('Mock Summary'));
+
+      expect(sentMessages.length, equals(1));
+      expect(sentMessages[0]['COMMAND'], equals(14));
+      expect(sentMessages[0]['TITLE'], equals('Mock Summary'));
     });
   });
 }

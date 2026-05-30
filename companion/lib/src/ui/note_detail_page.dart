@@ -3,6 +3,7 @@ import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:provider/provider.dart';
 import 'package:go_router/go_router.dart';
 import '../data/database.dart';
+import '../pebble/pebble_service.dart';
 
 class NoteDetailPage extends StatefulWidget {
   final int noteId;
@@ -15,6 +16,7 @@ class NoteDetailPage extends StatefulWidget {
 
 class _NoteDetailPageState extends State<NoteDetailPage> {
   bool _isRawTranscriptExpanded = false;
+  bool _isRetrying = false;
 
   @override
   Widget build(BuildContext context) {
@@ -107,6 +109,99 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
                       ),
                       const SizedBox(height: 20),
                       const Divider(color: Color(0xFF334155)),
+                      if (note.processingStatus == 'pending_foreground' || note.processingStatus == 'failed') ...[
+                        const SizedBox(height: 16),
+                        Container(
+                          padding: const EdgeInsets.all(16),
+                          decoration: BoxDecoration(
+                            color: note.processingStatus == 'pending_foreground' 
+                                ? Colors.amber.withOpacity(0.1) 
+                                : Colors.redAccent.withOpacity(0.1),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(
+                              color: note.processingStatus == 'pending_foreground' 
+                                  ? Colors.amber.withOpacity(0.3) 
+                                  : Colors.redAccent.withOpacity(0.3),
+                              width: 1,
+                            ),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                children: [
+                                  Icon(
+                                    note.processingStatus == 'pending_foreground'
+                                        ? Icons.hourglass_empty
+                                        : Icons.error_outline,
+                                    color: note.processingStatus == 'pending_foreground'
+                                        ? Colors.amber
+                                        : Colors.redAccent,
+                                    size: 20,
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Text(
+                                    note.processingStatus == 'pending_foreground'
+                                        ? 'Queued for AI Summarization'
+                                        : 'Summarization Failed',
+                                    style: TextStyle(
+                                      color: note.processingStatus == 'pending_foreground'
+                                          ? Colors.amber
+                                          : Colors.redAccent,
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 14,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 8),
+                              Text(
+                                note.bodyPlainText ?? 'Summarization is pending foreground or has failed.',
+                                style: const TextStyle(color: Colors.white70, fontSize: 13, height: 1.4),
+                              ),
+                              const SizedBox(height: 12),
+                              SizedBox(
+                                width: double.infinity,
+                                child: ElevatedButton.icon(
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: note.processingStatus == 'pending_foreground'
+                                        ? Colors.amber.withOpacity(0.2)
+                                        : Colors.redAccent.withOpacity(0.2),
+                                    foregroundColor: note.processingStatus == 'pending_foreground'
+                                        ? Colors.amber
+                                        : Colors.redAccent,
+                                    elevation: 0,
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(8),
+                                      side: BorderSide(
+                                        color: note.processingStatus == 'pending_foreground'
+                                            ? Colors.amber.withOpacity(0.5)
+                                            : Colors.redAccent.withOpacity(0.5),
+                                        width: 1,
+                                      ),
+                                    ),
+                                  ),
+                                  icon: _isRetrying
+                                      ? const SizedBox(
+                                          width: 12,
+                                          height: 12,
+                                          child: CircularProgressIndicator(
+                                            strokeWidth: 1.5,
+                                            color: Colors.white,
+                                          ),
+                                        )
+                                      : const Icon(Icons.refresh, size: 16),
+                                  label: Text(
+                                    _isRetrying ? 'Summarizing...' : 'Retry AI Summarization Now',
+                                    style: const TextStyle(fontWeight: FontWeight.bold),
+                                  ),
+                                  onPressed: _isRetrying ? null : () => _handleRetry(context, note.id),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
                       const SizedBox(height: 16),
                       // Markdown Body
                       MarkdownBody(
@@ -233,5 +328,50 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
         );
       },
     );
+  }
+
+  Future<void> _handleRetry(BuildContext context, int noteId) async {
+    if (_isRetrying) return;
+    setState(() {
+      _isRetrying = true;
+    });
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Retrying AI Summarization...'),
+        backgroundColor: Color(0xFF6366F1),
+        duration: Duration(seconds: 2),
+      ),
+    );
+
+    try {
+      final pebbleService = Provider.of<PebbleService>(context, listen: false);
+      await pebbleService.retrySummarization(noteId);
+      
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Summarization completed successfully!'),
+            backgroundColor: Color(0xFF10B981),
+          ),
+        );
+        setState(() {}); // refresh UI
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Retry failed: $e'),
+            backgroundColor: Colors.redAccent,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isRetrying = false;
+        });
+      }
+    }
   }
 }
